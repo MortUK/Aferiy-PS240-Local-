@@ -239,6 +239,17 @@ The integration writes the same registers as the official AECC app, but differen
 - On first install, sensors start at 0 and accumulate
 - After restart, last known values are restored automatically
 
+### Filing a bug report
+
+When [opening an issue](https://github.com/StekkerDeal/aecc-battery-local/issues), please attach a diagnostics export so we can see your device state without round-tripping for logs:
+
+1. **Settings → Devices & Services → AECC Battery → ⋮ → Download Diagnostics**
+2. Attach the resulting JSON file to the issue
+
+The export contains the integration version, device model and firmware, configured brand profile, the last raw poll response, a fresh dump of control registers `3000-3130`, and the last 20 control writes with their verify outcomes. Serial numbers and the local IP are redacted automatically.
+
+If the bug involves a specific control flow (e.g. switching between work modes), capture one diagnostics file per step — the diff tells us which registers behave unexpectedly.
+
 ---
 
 ## Credits

@@ -44,7 +44,21 @@ def mock_tcp_client():
                 },
             }
         )
-        client.get_control_parameters = AsyncMock(return_value=None)
+        client.get_control_parameters = AsyncMock(
+            return_value={
+                "ControlInfo": {
+                    "3000": "1",
+                    "3003": "1,00:00,23:59,0,0,0,0,0,0,100,10",
+                    "3020": "3",
+                    "3021": "1",
+                    "3022": "1",
+                    "3023": "10",
+                    "3024": "98",
+                    "3030": "0",
+                    "3039": "2400",
+                },
+            }
+        )
         client.set_control_parameters = AsyncMock(return_value={"result": "ok"})
         client.get_device_management_info = AsyncMock(return_value=None)
         yield client

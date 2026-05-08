@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import timedelta
+from collections import deque
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -132,6 +133,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # for the hybrid hold-then-unavailable behavior in AeccSensor.
         self._cleaner_last_accepted: dict[str, float] = {}
         self._cleaner_last_accepted_at: dict[str, float] = {}
+        # Rolling audit trail of recent control writes. Surfaced through
+        # diagnostics so we can correlate user-reported misbehaviour with
+        # the exact register payloads sent and the post-write verify
+        # results from the device.
+        self._write_history: deque[dict[str, Any]] = deque(maxlen=20)
         super().__init__(
             hass,
             _LOGGER,
@@ -357,7 +363,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         expected: dict[str, str],
         operation: str,
-    ) -> None:
+    ) -> list[dict[str, Any]] | None:
         """Re-read registers after a write and warn on mismatch.
 
         Best-effort verification: the SET response already returned OK
@@ -368,6 +374,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         AECC devices under load. Schedule slot strings (the long CSV) are
         log-only and never compared character-for-character because the
         device may normalise whitespace or trailing zeros.
+
+        Returns a list of per-register verify entries (or ``None`` if the
+        readback could not be performed) so callers like ``_logged_write``
+        can persist the result for diagnostics. Each entry is
+        ``{"register", "expected", "actual", "match"}`` where ``match`` is
+        ``None`` for the schedule-slot string (log-only).
         """
         try:
             await asyncio.sleep(self._WRITE_VERIFY_DELAY_SECONDS)
@@ -375,15 +387,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             resp = await self.client.get_control_parameters(reg_addrs)
             if resp is None:
                 _LOGGER.debug("Write-back verify for %s: no response (skipping)", operation)
-                return
+                return None
             actual = resp.get("ControlInfo") or resp.get("GetParameters") or {}
             if not isinstance(actual, dict):
-                return
+                return None
+            results: list[dict[str, Any]] = []
             for reg, expected_val in expected.items():
+                actual_val = actual.get(reg) or actual.get(int(reg))
                 if reg == REG_CONTROL_TIME1:
                     # Schedule slot is a CSV string, device may reorder or
                     # rewrite parts. Log-only, no equality check.
-                    actual_val = actual.get(reg) or actual.get(int(reg))
                     _LOGGER.debug(
                         "Write-back verify for %s: %s = %r (expected %r)",
                         operation,
@@ -391,11 +404,35 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         actual_val,
                         expected_val,
                     )
+                    results.append(
+                        {
+                            "register": reg,
+                            "expected": expected_val,
+                            "actual": actual_val,
+                            "match": None,
+                        }
+                    )
                     continue
-                actual_val = actual.get(reg) or actual.get(int(reg))
                 if actual_val is None:
+                    results.append(
+                        {
+                            "register": reg,
+                            "expected": expected_val,
+                            "actual": None,
+                            "match": None,
+                        }
+                    )
                     continue
-                if str(actual_val).strip() != str(expected_val).strip():
+                match = str(actual_val).strip() == str(expected_val).strip()
+                results.append(
+                    {
+                        "register": reg,
+                        "expected": expected_val,
+                        "actual": actual_val,
+                        "match": match,
+                    }
+                )
+                if not match:
                     _LOGGER.warning(
                         "Write-back verify mismatch for %s: register %s expected %r, "
                         "device reports %r, write may have been silently dropped",
@@ -404,8 +441,40 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         expected_val,
                         actual_val,
                     )
+            return results
         except (TimeoutError, OSError, asyncio.IncompleteReadError) as exc:
             _LOGGER.debug("Write-back verify for %s failed: %s", operation, exc)
+            return None
+
+    async def _logged_write(self, payload: dict[str, str], operation: str) -> bool:
+        """Send a control-register write and append an entry to the audit trail.
+
+        Wraps ``client.set_control_parameters`` + ``_verify_write`` so all
+        mutating coordinator methods record what they sent, whether the
+        device acknowledged, and the per-register verify outcome. The
+        rolling buffer is exposed via ``write_history`` for diagnostics.
+        """
+        entry: dict[str, Any] = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "operation": operation,
+            "payload": dict(payload),
+            "response_received": False,
+            "verify_result": None,
+        }
+        self._write_history.append(entry)
+        resp = await self.client.set_control_parameters(payload)
+        entry["response_received"] = resp is not None
+        if resp is None:
+            _LOGGER.warning("SET %s failed - no response from battery", operation)
+            return False
+        _LOGGER.debug("SET %s response: %s", operation, resp)
+        entry["verify_result"] = await self._verify_write(payload, operation)
+        return True
+
+    @property
+    def write_history(self) -> list[dict[str, Any]]:
+        """Recent control writes with verify outcomes (newest last)."""
+        return list(self._write_history)
 
     async def async_set_battery_control(self, direction: str, power_w: int) -> bool:
         has_storage = bool(self.data and self.data.get("Storage_list"))
@@ -447,15 +516,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             slot1,
         )
 
-        resp = await self.client.set_control_parameters(payload)
-
-        if resp is None:
-            _LOGGER.warning("SET battery_control failed - no response from battery")
-            return False
-
-        _LOGGER.debug("SET battery_control response: %s", resp)
-        await self._verify_write(payload, f"battery_control({direction}, {power_w}W)")
-        return True
+        return await self._logged_write(payload, f"battery_control({direction}, {power_w}W)")
 
     async def async_set_power_setpoint(self, watts: float) -> bool:
         power_w = int(watts)
@@ -472,31 +533,17 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.warning("SET work_mode: unknown mode %r", mode)
             return False
         _LOGGER.info("SET work_mode %r -> registers=%s", mode, registers)
-        resp = await self.client.set_control_parameters(registers)
-
-        if resp is None:
-            _LOGGER.warning("SET work_mode %r failed - no response", mode)
-            return False
-        await self._verify_write(registers, f"work_mode({mode})")
-        return True
+        return await self._logged_write(dict(registers), f"work_mode({mode})")
 
     async def async_set_min_soc(self, value: int) -> bool:
         self._commanded_min_soc = value
         payload = {REG_MIN_SOC: str(value)}
-        resp = await self.client.set_control_parameters(payload)
-        if resp is None:
-            return False
-        await self._verify_write(payload, f"min_soc({value}%)")
-        return True
+        return await self._logged_write(payload, f"min_soc({value}%)")
 
     async def async_set_max_soc(self, value: int) -> bool:
         self._commanded_max_soc = value
         payload = {REG_MAX_SOC: str(value)}
-        resp = await self.client.set_control_parameters(payload)
-        if resp is None:
-            return False
-        await self._verify_write(payload, f"max_soc({value}%)")
-        return True
+        return await self._logged_write(payload, f"max_soc({value}%)")
 
     async def async_read_initial_state(self) -> None:
         resp = await self.client.get_control_parameters(
