@@ -7,16 +7,12 @@
         "data": {
           "host": "IP-adres",
           "port": "TCP-poort",
-          "name": "Apparaatnaam",
-          "manufacturer": "Batterijmerk",
-          "model": "Model (optioneel)"
+          "name": "Apparaatnaam"
         },
         "data_description": {
           "host": "Vast lokaal IP-adres van je batterij (bijv. 192.168.0.100)",
           "port": "TCP-poort waarop de batterij luistert (standaard 8080)",
-          "name": "Naam zoals weergegeven in Home Assistant",
-          "manufacturer": "Selecteer het merk van je batterij",
-          "model": "Modelnaam (bijv. PS240)"
+          "name": "Naam zoals weergegeven in Home Assistant"
         }
       }
     },
@@ -37,14 +33,10 @@
           "host": "IP-adres",
           "port": "TCP-poort",
           "name": "Apparaatnaam",
-          "manufacturer": "Batterijmerk",
-          "model": "Model (optioneel)",
-          "extended_power": "Uitgebreid vermogensbereik (tot 2400W)",
           "advanced_energy_sensors": "Geavanceerde energie-inschattingssensoren",
           "poll_interval": "Pollinginterval"
         },
         "data_description": {
-          "extended_power": "Standaard is lokale besturing beperkt tot 800W. Schakel dit in om vermogen tot 2400W toe te staan via register 3039. Dit is dezelfde instelling die de AECC-app gebruikt.",
           "advanced_energy_sensors": "Voegt optionele inschattingssensoren toe die externe net-, zonneprognose- en huishoudverbruik-entiteiten kunnen gebruiken.",
           "poll_interval": "Hoe vaak de batterij lokaal wordt uitgelezen, in seconden."
         }

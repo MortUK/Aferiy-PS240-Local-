@@ -15,7 +15,6 @@ from homeassistant.util import slugify
 from .const import (
     BRAND_PROFILES,
     CONF_ADVANCED_ENERGY_SENSORS,
-    CONF_EXTENDED_POWER,
     CONF_HOST,
     CONF_MANUFACTURER,
     CONF_MODEL,
@@ -24,6 +23,7 @@ from .const import (
     CONF_PORT,
     DEFAULT_BRAND_PROFILE,
     DEFAULT_MANUFACTURER,
+    DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
     DOMAIN,
     POLL_INTERVAL,
@@ -116,7 +116,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     port: int = entry.data[CONF_PORT]
     name: str = entry.data[CONF_NAME]
     manufacturer: str = entry.data.get(CONF_MANUFACTURER, DEFAULT_MANUFACTURER)
-    model: str = entry.data.get(CONF_MODEL, "")
+    model: str = entry.data.get(CONF_MODEL, DEFAULT_MODEL)
 
     client = AeccTcpClient(host, port, timeout=DEFAULT_TIMEOUT)
     try:
@@ -124,7 +124,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except (TimeoutError, OSError, ConnectionError) as exc:
         raise ConfigEntryNotReady(f"Cannot connect to {host}:{port} - {exc}") from exc
 
-    extended_power = entry.options.get(CONF_EXTENDED_POWER, False)
     poll_interval = entry.options.get(CONF_POLL_INTERVAL, POLL_INTERVAL)
     brand_profile = BRAND_PROFILES.get(manufacturer, DEFAULT_BRAND_PROFILE)
     coordinator = AeccBatteryCoordinator(
@@ -134,7 +133,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         poll_interval=poll_interval,
         manufacturer=manufacturer,
         model=model,
-        extended_power=extended_power,
         brand_profile=brand_profile,
     )
     await coordinator.async_config_entry_first_refresh()

@@ -7,16 +7,12 @@
         "data": {
           "host": "Adresse IP",
           "port": "Port TCP",
-          "name": "Nom de l'appareil",
-          "manufacturer": "Marque de batterie",
-          "model": "Modèle (optionnel)"
+          "name": "Nom de l'appareil"
         },
         "data_description": {
           "host": "Adresse IP locale fixe de votre batterie (ex. 192.168.0.100)",
           "port": "Port TCP de la batterie (généralement 8080)",
-          "name": "Nom affiché dans Home Assistant",
-          "manufacturer": "Sélectionnez la marque de votre batterie",
-          "model": "Nom du modèle (ex. PS240)"
+          "name": "Nom affiché dans Home Assistant"
         }
       }
     },
@@ -37,14 +33,10 @@
           "host": "Adresse IP",
           "port": "Port TCP",
           "name": "Nom de l'appareil",
-          "manufacturer": "Marque de batterie",
-          "model": "Modèle (optionnel)",
-          "extended_power": "Plage de puissance étendue (jusqu'à 2400W)",
           "advanced_energy_sensors": "Capteurs avancés d'estimation énergétique",
           "poll_interval": "Intervalle d'interrogation"
         },
         "data_description": {
-          "extended_power": "Par défaut, le contrôle local est limité à 800W. Activez cette option pour permettre jusqu'à 2400W via le registre 3039. C'est le même paramètre utilisé par l'application AECC.",
           "advanced_energy_sensors": "Ajoute des capteurs d'estimation optionnels pouvant utiliser des entités externes de réseau, prévision solaire et demande du foyer.",
           "poll_interval": "Fréquence d'interrogation locale de la batterie, en secondes."
         }

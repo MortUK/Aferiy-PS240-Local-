@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.13
+
+- Simplified the setup and reconfigure forms for the AFERIY PS240.
+- Removed the extended 2400 W power option from the UI and normal control writes.
+- Read register 3039 for diagnostics so PS240 output-limit behaviour can be investigated safely.
+
 ## 1.4.12
 
 - Removed unsupported `domains` key from `hacs.json` for HACS validation.

@@ -6,7 +6,6 @@ DOMAIN = "aecc_battery"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_NAME = "name"
-CONF_EXTENDED_POWER = "extended_power"
 CONF_ADVANCED_ENERGY_SENSORS = "advanced_energy_sensors"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_MANUFACTURER = "manufacturer"
@@ -17,11 +16,12 @@ DEFAULT_HOST = "192.168.0.1"
 DEFAULT_PORT = 8080
 DEFAULT_NAME = "AFERIY PS240 (Local)"
 DEFAULT_MANUFACTURER = "AFERIY"
+DEFAULT_MODEL = "PS240"
 DEFAULT_TIMEOUT = 5  # seconds
 POLL_INTERVAL = 5  # seconds – change this to update faster/slower
 MIN_POLL_INTERVAL = 2  # seconds – hard floor to avoid flooding the device
-MAX_BATTERY_POWER_W = 2400  # watts – hardware rated max
-MAX_REGISTER_POWER_DEFAULT = 800  # watts – default local TCP limit without extended power
+MAX_REGISTER_POWER_DEFAULT = 800  # watts – observed reliable local TCP output limit
+PS240_EXPERIMENTAL_MAX_OUTPUT_W = 1200  # watts – exposed for cautious local testing
 BATTERY_MODULE_CAPACITY_KWH = 1.958
 DEFAULT_BATTERY_MODULE_COUNT = 3
 DEFAULT_BATTERY_CAPACITY_KWH = round(
@@ -41,17 +41,6 @@ def battery_capacity_preset_label(module_count: int) -> str:
     capacity = battery_capacity_for_modules(module_count)
     suffix = "module" if module_count == 1 else "modules"
     return f"{module_count} {suffix} ({capacity:.3f} kWh)"
-
-# Known AECC brands (for config flow dropdown)
-KNOWN_BRANDS = [
-    "AFERIY",
-    "Richard Owen",
-    "Lunergy",
-    "Sunpura",
-    "Voltdeer",
-    "AEG",
-    "Other",
-]
 
 # ─── Sensor cleaning profile ─────────────────────────────────────────────────
 # Per-brand thresholds for the physics-aware SOC cleaner.
@@ -118,14 +107,14 @@ REG_CUSTOM_MODE = "3030"  # 0 = off, 1 = on
 
 # Power setpoint, time-slot format (confirmed from scan):
 #   "timeSwitch,startHH:MM,endHH:MM,powerW,0,mode,0,0,0,chargingSOC,dischargingSOC"
-#   e.g. "1,00:00,23:59,2400,0,6,0,0,0,100,10"    (discharge at 2400 W)
-#        "1,00:00,23:59,-2400,0,6,0,0,0,100,10"   (charge at 2400 W)
+#   e.g. "1,00:00,23:59,800,0,6,0,0,0,100,10"     (discharge at 800 W)
+#        "1,00:00,23:59,-800,0,6,0,0,0,100,10"    (charge at 800 W)
 #        "0,00:00,00:00,0,0,0,0,0,0,100,10"       (idle / disabled)
 REG_CONTROL_TIME1 = "3003"  # First active time slot
 
 REG_MIN_SOC = "3023"  # Minimum discharge SOC  (confirmed: currently 10)
 REG_MAX_SOC = "3024"  # Maximum charge SOC     (confirmed: currently 98)
-REG_MAX_FEED_POWER = "3039"  # Max feed power in W    (confirmed: currently 2400)
+REG_MAX_FEED_POWER = "3039"  # Max feed power in W (read for diagnostics; not written by default)
 
 # Empty schedule slot - clears the active time slot so the firmware won't
 # auto-re-enable EMS after a disable.

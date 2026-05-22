@@ -14,7 +14,7 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Battery state of charge, power, PV, charge, discharge, and diagnostic sensors
 - Manual charge, discharge, idle, and self-consumption controls
 - Charge and discharge SOC limits
-- Optional extended power range up to 2400 W when enabled on the battery
+- Charge/discharge power targets from 800 W to 1200 W for cautious PS240 testing
 - Physics-aware filtering for occasional invalid SOC/power readings
 - Home Assistant diagnostics export support
 - Custom AFERIY PS240 icon
@@ -40,7 +40,7 @@ Copy `custom_components/aecc_battery` into your Home Assistant `config/custom_co
 1. In Home Assistant, go to Settings > Devices & services.
 2. Choose Add integration.
 3. Search for `AFERIY PS240 (Local)`.
-4. Enter the battery's local IP address, TCP port, display name, brand, and model.
+4. Enter the battery's local IP address, TCP port, and display name.
 
 Use a static IP address or DHCP reservation for the battery so Home Assistant can always find it.
 
@@ -48,15 +48,14 @@ Use a static IP address or DHCP reservation for the battery so Home Assistant ca
 
 Open the integration options to adjust:
 
-- Extended power range up to 2400 W
 - Polling interval
 - Advanced energy estimate sensors
 
 The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
 
-## Extended Power
+## Output Limit Notes
 
-The battery and AECC app may cap local control at 800 W unless the matching app-side output limit is increased. Only enable the extended power option if the battery installation and circuit are suitable for the higher load.
+The PS240 has been observed to accept 800 W reliably over local TCP. The integration keeps register `3039` visible in diagnostics so higher output-limit behaviour can be investigated, but it does not write that register during normal commands.
 
 ## Documentation
 

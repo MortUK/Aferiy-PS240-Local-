@@ -23,6 +23,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     DEFAULT_BATTERY_CAPACITY_KWH,
     DOMAIN,
+    MAX_REGISTER_POWER_DEFAULT,
+    PS240_EXPERIMENTAL_MAX_OUTPUT_W,
 )
 from .coordinator import AeccBatteryCoordinator
 
@@ -146,8 +148,8 @@ class AeccChargePowerSlider(AeccPassivePowerSlider):
 
     _attr_name = "Charge Power Target"
     _attr_icon = "mdi:battery-arrow-up"
-    _attr_native_min_value = 800
-    _attr_native_max_value = 1200
+    _attr_native_min_value = MAX_REGISTER_POWER_DEFAULT
+    _attr_native_max_value = PS240_EXPERIMENTAL_MAX_OUTPUT_W
     _attr_unique_id_suffix = "charge_power_target"
     attr_name_on_coordinator = "commanded_charge_power"
     default_value = 800
@@ -165,8 +167,8 @@ class AeccDischargePowerSlider(AeccPassivePowerSlider):
 
     _attr_name = "Discharge Power Target"
     _attr_icon = "mdi:battery-arrow-down"
-    _attr_native_min_value = 800
-    _attr_native_max_value = 1200
+    _attr_native_min_value = MAX_REGISTER_POWER_DEFAULT
+    _attr_native_max_value = PS240_EXPERIMENTAL_MAX_OUTPUT_W
     _attr_unique_id_suffix = "discharge_power_target"
     attr_name_on_coordinator = "commanded_discharge_power"
     default_value = 800

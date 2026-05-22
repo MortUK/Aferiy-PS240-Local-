@@ -17,7 +17,6 @@ from .cleaners import CLEANERS, CleanerContext
 from .const import (
     DEFAULT_BRAND_PROFILE,
     DOMAIN,
-    MAX_BATTERY_POWER_W,
     MAX_REGISTER_POWER_DEFAULT,
     MIN_POLL_INTERVAL,
     MODE_CUSTOM,
@@ -122,7 +121,6 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         poll_interval: int = POLL_INTERVAL,
         manufacturer: str = "AECC",
         model: str = "",
-        extended_power: bool = False,
         brand_profile: dict[str, Any] | None = None,
     ) -> None:
         self.client = client
@@ -146,10 +144,10 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
         self._commanded_min_soc: int = 10
         self._commanded_max_soc: int = 100
-        self.extended_power: bool = extended_power
-        self.max_register_power: int = MAX_BATTERY_POWER_W if extended_power else MAX_REGISTER_POWER_DEFAULT
+        self.max_register_power: int = MAX_REGISTER_POWER_DEFAULT
         self.initial_min_soc: int | None = None
         self.initial_max_soc: int | None = None
+        self.initial_max_feed_power: int | None = None
         self.initial_work_mode: str | None = None
         self.initial_power: int | None = None
         # Per-brand cleaning profile (thresholds for the physics-aware
@@ -562,15 +560,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_CONTROL_TIME1: slot1,
         }
 
-        if self.extended_power:
-            payload[REG_MAX_FEED_POWER] = str(MAX_BATTERY_POWER_W)
-
-        if power_w > MAX_REGISTER_POWER_DEFAULT and not self.extended_power:
+        if power_w > MAX_REGISTER_POWER_DEFAULT:
             _LOGGER.warning(
-                "Power %d W exceeds default 800 W limit. "
-                "Enable 'Extended power range' in integration options to allow up to %d W.",
+                "Power %d W is above the observed reliable PS240 local output limit of %d W. "
+                "The command will be sent without changing register 3039.",
                 power_w,
-                MAX_BATTERY_POWER_W,
+                MAX_REGISTER_POWER_DEFAULT,
             )
 
         _LOGGER.info(
@@ -714,6 +709,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 int(REG_MIN_SOC),
                 int(REG_MAX_SOC),
                 int(REG_CUSTOM_MODE),
+                int(REG_MAX_FEED_POWER),
             ]
         )
         if resp is None:
@@ -745,6 +741,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ai_charge = _int(REG_AI_SMART_CHARGE)
         ai_discharge = _int(REG_AI_SMART_DISC)
         custom_mode = _int(REG_CUSTOM_MODE)
+        max_feed_power = _int(REG_MAX_FEED_POWER)
 
         if min_soc is not None:
             self.initial_min_soc = min_soc
@@ -754,6 +751,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.initial_max_soc = max_soc
             self._commanded_max_soc = max_soc
             _LOGGER.info("Read initial max SOC: %d%%", max_soc)
+        if max_feed_power is not None:
+            self.initial_max_feed_power = max_feed_power
+            _LOGGER.info("Read initial max feed power register 3039: %d W", max_feed_power)
 
         slot_str = params.get(REG_CONTROL_TIME1) or params.get(int(REG_CONTROL_TIME1))
         if slot_str and isinstance(slot_str, str):

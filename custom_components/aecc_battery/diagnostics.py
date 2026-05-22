@@ -131,7 +131,6 @@ async def async_get_config_entry_diagnostics(
         poll_seconds = int(coordinator.update_interval.total_seconds())
 
     config_section = {
-        "extended_power": coordinator.extended_power,
         "max_register_power": coordinator.max_register_power,
         "brand_profile": dict(coordinator.brand_profile),
         "poll_interval_seconds": poll_seconds,
@@ -157,6 +156,7 @@ async def async_get_config_entry_diagnostics(
         "commanded_max_soc": coordinator._commanded_max_soc,
         "initial_min_soc": coordinator.initial_min_soc,
         "initial_max_soc": coordinator.initial_max_soc,
+        "initial_max_feed_power": coordinator.initial_max_feed_power,
         "initial_work_mode": coordinator.initial_work_mode,
         "initial_power": coordinator.initial_power,
     }
