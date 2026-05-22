@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.10
+
+- Declared the optional recorder integration relationship for Hassfest validation.
+
 ## 1.4.9
 
 - Added connection health, last successful update, consecutive poll failure, and last command result sensors.
