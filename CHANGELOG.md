@@ -3,6 +3,7 @@
 ## 1.4.12
 
 - Removed unsupported `domains` key from `hacs.json` for HACS validation.
+- Re-ran validation after adding repository topics required by HACS.
 
 ## 1.4.11
 
