@@ -1,0 +1,69 @@
+snapshot_control_registers:
+  name: Snapshot control registers
+  description: >
+    Reads the AECC control register range through the existing integration
+    connection and writes the result to a diagnostic sensor. Use before and
+    after changing AFERIY/AEC modes to discover which local registers changed.
+  fields:
+    label:
+      name: Label
+      description: Short label for this snapshot, for example before_export or after_export.
+      required: false
+      example: before_export
+      selector:
+        text:
+    entry_id:
+      name: Entry ID
+      description: Optional Home Assistant config entry ID. Leave blank to snapshot all AECC Battery entries.
+      required: false
+      selector:
+        text:
+    start_register:
+      name: Start register
+      description: Optional first control register to read. Leave blank with end register for the default 3000-3130 diagnostic range.
+      required: false
+      example: 3131
+      selector:
+        number:
+          min: 0
+          max: 9999
+          mode: box
+    end_register:
+      name: End register
+      description: Optional final control register to read. The service reads at most 250 registers per call.
+      required: false
+      example: 3300
+      selector:
+        number:
+          min: 0
+          max: 9999
+          mode: box
+
+snapshot_power_flow:
+  name: Snapshot power flow
+  description: >
+    Captures the current AECC Battery, Shelly grid, and AFERIY cloud helper
+    entity states into one diagnostic sensor for troubleshooting.
+  fields:
+    label:
+      name: Label
+      description: Short label for this snapshot, for example sunny_zero_feed or export_test.
+      required: false
+      example: sunny_zero_feed
+      selector:
+        text:
+
+restore_original_self_consumption:
+  name: Restore stock self-consumption
+  description: >
+    Diagnostic action that applies the stock self-consumption register write
+    only. It leaves schedule mode and the manual time slot unchanged, so use
+    it for export/clipping tests rather than normal
+    overnight charging automation.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional Home Assistant config entry ID. Leave blank for the active AECC Battery entry.
+      required: false
+      selector:
+        text:

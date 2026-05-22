@@ -1,0 +1,13 @@
+{
+  "domain": "aecc_battery",
+  "name": "AFERIY PS240 (Local)",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/MortUK/Aferiy-PS240-Local-",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/MortUK/Aferiy-PS240-Local-/issues",
+  "quality_scale": "bronze",
+  "requirements": [],
+  "version": "1.4.8"
+}

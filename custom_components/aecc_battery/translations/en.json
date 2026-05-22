@@ -1,0 +1,54 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to AFERIY PS240 (Local)",
+        "description": "Enter the local network details for your AFERIY PS240 battery. The battery must be reachable at the given IP before you can continue.",
+        "data": {
+          "host": "IP Address",
+          "port": "TCP Port",
+          "name": "Device Name",
+          "manufacturer": "Battery Brand",
+          "model": "Model (optional)"
+        },
+        "data_description": {
+          "host": "Static local IP of your battery (e.g. 192.168.0.100)",
+          "port": "TCP port the battery listens on (typically 8080)",
+          "name": "Friendly name shown in Home Assistant",
+          "manufacturer": "Select your battery brand",
+          "model": "Model name (for example PS240)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect - check the IP, port, and that the battery is online.",
+      "unknown": "Unexpected error - see the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This battery (host:port) is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Reconfigure AFERIY PS240 (Local)",
+        "description": "Update the connection details. Home Assistant will reconnect immediately.",
+        "data": {
+          "host": "IP Address",
+          "port": "TCP Port",
+          "name": "Device Name",
+          "manufacturer": "Battery Brand",
+          "model": "Model (optional)",
+          "extended_power": "Extended power range (up to 2400W)"
+        },
+        "data_description": {
+          "extended_power": "By default, local control is limited to 800W. Enable this to allow power up to 2400W by writing register 3039. This is the same setting the AECC app uses when you configure power above 800W."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect - check the IP, port, and that the battery is online.",
+      "unknown": "Unexpected error - see the Home Assistant log for details."
+    }
+  }
+}
