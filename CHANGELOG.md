@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.12
+
+- Removed unsupported `domains` key from `hacs.json` for HACS validation.
+
 ## 1.4.11
 
 - Sorted manifest keys for Hassfest validation.

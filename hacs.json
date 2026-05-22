@@ -1,8 +1,5 @@
 {
   "name": "AFERIY PS240 (Local)",
   "render_readme": true,
-  "homeassistant": "2024.8.0",
-  "domains": [
-    "aecc_battery"
-  ]
+  "homeassistant": "2024.8.0"
 }
