@@ -39,10 +39,14 @@
           "name": "Nom de l'appareil",
           "manufacturer": "Marque de batterie",
           "model": "Modèle (optionnel)",
-          "extended_power": "Plage de puissance étendue (jusqu'à 2400W)"
+          "extended_power": "Plage de puissance étendue (jusqu'à 2400W)",
+          "advanced_energy_sensors": "Capteurs avancés d'estimation énergétique",
+          "poll_interval": "Intervalle d'interrogation"
         },
         "data_description": {
-          "extended_power": "Par défaut, le contrôle local est limité à 800W. Activez cette option pour permettre jusqu'à 2400W via le registre 3039. C'est le même paramètre utilisé par l'application AECC."
+          "extended_power": "Par défaut, le contrôle local est limité à 800W. Activez cette option pour permettre jusqu'à 2400W via le registre 3039. C'est le même paramètre utilisé par l'application AECC.",
+          "advanced_energy_sensors": "Ajoute des capteurs d'estimation optionnels pouvant utiliser des entités externes de réseau, prévision solaire et demande du foyer.",
+          "poll_interval": "Fréquence d'interrogation locale de la batterie, en secondes."
         }
       }
     },

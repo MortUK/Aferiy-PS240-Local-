@@ -39,10 +39,14 @@
           "name": "Gerätename",
           "manufacturer": "Batteriemarke",
           "model": "Modell (optional)",
-          "extended_power": "Erweiterter Leistungsbereich (bis 2400W)"
+          "extended_power": "Erweiterter Leistungsbereich (bis 2400W)",
+          "advanced_energy_sensors": "Erweiterte Energie-Schätzsensoren",
+          "poll_interval": "Abfrageintervall"
         },
         "data_description": {
-          "extended_power": "Standardmäßig ist die lokale Steuerung auf 800W begrenzt. Aktivieren Sie dies, um Leistung bis 2400W über Register 3039 zu ermöglichen. Dies ist die gleiche Einstellung wie in der AECC-App."
+          "extended_power": "Standardmäßig ist die lokale Steuerung auf 800W begrenzt. Aktivieren Sie dies, um Leistung bis 2400W über Register 3039 zu ermöglichen. Dies ist die gleiche Einstellung wie in der AECC-App.",
+          "advanced_energy_sensors": "Fügt optionale Schätzsensoren hinzu, die externe Netz-, Solarprognose- und Verbrauchsdaten verwenden können.",
+          "poll_interval": "Wie oft die Batterie lokal abgefragt wird, in Sekunden."
         }
       }
     },

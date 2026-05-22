@@ -140,6 +140,17 @@ async def async_get_config_entry_diagnostics(
     live_state_section = {
         "last_update_success": coordinator.last_update_success,
         "consecutive_failures": coordinator._consecutive_failures,
+        "last_successful_update": (
+            coordinator.last_successful_update.isoformat()
+            if coordinator.last_successful_update is not None
+            else None
+        ),
+        "last_failed_update": (
+            coordinator.last_failed_update.isoformat()
+            if coordinator.last_failed_update is not None
+            else None
+        ),
+        "last_failure_reason": coordinator.last_failure_reason,
         "commanded_power": coordinator.commanded_power,
         "commanded_direction": coordinator.commanded_direction,
         "commanded_min_soc": coordinator._commanded_min_soc,

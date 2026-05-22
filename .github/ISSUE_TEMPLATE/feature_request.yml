@@ -1,0 +1,22 @@
+name: Feature Request
+description: Suggest an improvement or new entity
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like added?
+      placeholder: Describe the entity, control, or behaviour you want.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Why is it useful?
+      placeholder: Tell us what automation or dashboard this would help with.
+  - type: textarea
+    id: data
+    attributes:
+      label: Supporting diagnostics or register data
+      render: json

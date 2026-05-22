@@ -23,7 +23,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utcnow
 
-from .const import DEFAULT_BATTERY_CAPACITY_KWH, DOMAIN
+from .const import CONF_ADVANCED_ENERGY_SENSORS, DEFAULT_BATTERY_CAPACITY_KWH, DOMAIN
 from .coordinator import AeccBatteryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -236,12 +236,18 @@ async def async_setup_entry(
     entities.append(AeccGridExportSensor(coordinator, config_entry))
     entities.append(AeccTotalBatteryOutputPowerSensor(coordinator, config_entry))
     entities.append(AeccBatteryPowerSensor(coordinator, config_entry))
-    entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
     entities.append(AeccBatteryStatusSensor(coordinator, config_entry))
-    entities.append(AeccEstimatedChargeTimeSensor(coordinator, config_entry))
-    entities.append(AeccWillFillTodaySensor(coordinator, config_entry))
-    entities.append(AeccRuntimeAtCurrentHouseDemandSensor(coordinator, config_entry))
-    entities.append(AeccRecommendedOvernightSocSensor(coordinator, config_entry))
+    entities.append(AeccConnectionStatusSensor(coordinator, config_entry))
+    entities.append(AeccLastSuccessfulUpdateSensor(coordinator, config_entry))
+    entities.append(AeccConsecutiveFailuresSensor(coordinator, config_entry))
+    entities.append(AeccLastCommandResultSensor(coordinator, config_entry))
+
+    if config_entry.options.get(CONF_ADVANCED_ENERGY_SENSORS, False):
+        entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
+        entities.append(AeccEstimatedChargeTimeSensor(coordinator, config_entry))
+        entities.append(AeccWillFillTodaySensor(coordinator, config_entry))
+        entities.append(AeccRuntimeAtCurrentHouseDemandSensor(coordinator, config_entry))
+        entities.append(AeccRecommendedOvernightSocSensor(coordinator, config_entry))
 
     if coordinator.firmware_version is not None:
         entities.append(AeccFirmwareSensor(coordinator, config_entry))
@@ -655,6 +661,155 @@ class AeccBatteryStatusSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorE
 
         self._last_status = status
         return status
+
+
+class AeccConnectionStatusSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    """Human-readable integration connection status."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Connection Status"
+    _attr_icon = "mdi:lan-connect"
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_connection_status"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> str:
+        if self.coordinator.last_update_success:
+            return "Online"
+        if self.coordinator.last_successful_update is not None:
+            return "Using last good data"
+        return "Offline"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        latest_write = self.coordinator.latest_write or {}
+        return {
+            "host": self.coordinator.client.host,
+            "port": self.coordinator.client.port,
+            "poll_interval_seconds": (
+                int(self.coordinator.update_interval.total_seconds())
+                if self.coordinator.update_interval is not None
+                else None
+            ),
+            "last_successful_update": (
+                self.coordinator.last_successful_update.isoformat()
+                if self.coordinator.last_successful_update is not None
+                else None
+            ),
+            "last_failed_update": (
+                self.coordinator.last_failed_update.isoformat()
+                if self.coordinator.last_failed_update is not None
+                else None
+            ),
+            "consecutive_failures": self.coordinator._consecutive_failures,
+            "last_failure_reason": self.coordinator.last_failure_reason,
+            "last_command": latest_write.get("operation"),
+            "last_command_at": latest_write.get("timestamp"),
+            "last_command_acknowledged": latest_write.get("response_received"),
+        }
+
+
+class AeccLastSuccessfulUpdateSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    """Timestamp of the last successful local poll."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Last Successful Update"
+    _attr_icon = "mdi:update"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_last_successful_update"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> datetime | None:
+        return self.coordinator.last_successful_update
+
+
+class AeccConsecutiveFailuresSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    """Number of consecutive failed local polls."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Consecutive Poll Failures"
+    _attr_icon = "mdi:counter"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_consecutive_poll_failures"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator._consecutive_failures
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "last_failure_reason": self.coordinator.last_failure_reason,
+            "last_failed_update": (
+                self.coordinator.last_failed_update.isoformat()
+                if self.coordinator.last_failed_update is not None
+                else None
+            ),
+        }
+
+
+class AeccLastCommandResultSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    """Result of the last control command sent to the battery."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Last Command Result"
+    _attr_icon = "mdi:clipboard-check-outline"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_last_command_result"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> str:
+        latest = self.coordinator.latest_write
+        if latest is None:
+            return "No commands sent"
+        if not latest.get("response_received"):
+            return "No response"
+        verify = latest.get("verify_result")
+        if not verify:
+            return "Acknowledged"
+        mismatches = [item for item in verify if item.get("match") is False]
+        if mismatches:
+            return "Verify mismatch"
+        return "Verified"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        latest = self.coordinator.latest_write
+        if latest is None:
+            return {}
+        return dict(latest)
 
 
 class AeccEstimatedChargeTimeSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):

@@ -39,10 +39,14 @@
           "name": "Apparaatnaam",
           "manufacturer": "Batterijmerk",
           "model": "Model (optioneel)",
-          "extended_power": "Uitgebreid vermogensbereik (tot 2400W)"
+          "extended_power": "Uitgebreid vermogensbereik (tot 2400W)",
+          "advanced_energy_sensors": "Geavanceerde energie-inschattingssensoren",
+          "poll_interval": "Pollinginterval"
         },
         "data_description": {
-          "extended_power": "Standaard is lokale besturing beperkt tot 800W. Schakel dit in om vermogen tot 2400W toe te staan via register 3039. Dit is dezelfde instelling die de AECC-app gebruikt."
+          "extended_power": "Standaard is lokale besturing beperkt tot 800W. Schakel dit in om vermogen tot 2400W toe te staan via register 3039. Dit is dezelfde instelling die de AECC-app gebruikt.",
+          "advanced_energy_sensors": "Voegt optionele inschattingssensoren toe die externe net-, zonneprognose- en huishoudverbruik-entiteiten kunnen gebruiken.",
+          "poll_interval": "Hoe vaak de batterij lokaal wordt uitgelezen, in seconden."
         }
       }
     },

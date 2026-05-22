@@ -131,6 +131,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model = model
         self._consecutive_failures: int = 0
         self._last_good_data: dict[str, Any] | None = None
+        self.last_successful_update: datetime | None = None
+        self.last_failed_update: datetime | None = None
+        self.last_failure_reason: str | None = None
         self._failure_tolerance: int = 5
         self.device_serial: str | None = None
         self.firmware_version: str | None = None
@@ -175,12 +178,28 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.client.async_connect()
 
     async def _async_update_data(self) -> dict[str, Any]:
-        raw = await self.client.get_energy_parameters()
+        try:
+            raw = await self.client.get_energy_parameters()
+        except Exception as exc:
+            self._consecutive_failures += 1
+            self.last_failed_update = datetime.now(UTC)
+            self.last_failure_reason = str(exc)
+            if self._consecutive_failures <= self._failure_tolerance and self._last_good_data is not None:
+                _LOGGER.debug(
+                    "Poll failed (%d/%d) - keeping last known data: %s",
+                    self._consecutive_failures,
+                    self._failure_tolerance,
+                    exc,
+                )
+                return self._last_good_data
+            raise UpdateFailed(f"Poll failed for {self.client.host}:{self.client.port}: {exc}") from exc
 
         valid = raw is not None and (raw.get("Storage_list") or raw.get("SSumInfoList"))
 
         if not valid:
             self._consecutive_failures += 1
+            self.last_failed_update = datetime.now(UTC)
+            self.last_failure_reason = "missing Storage_list/SSumInfoList"
             if self._consecutive_failures == 1:
                 _LOGGER.warning(
                     "Poll response missing expected data (Storage_list/SSumInfoList). "
@@ -195,12 +214,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._failure_tolerance,
                 )
                 return self._last_good_data
-            raise UpdateFailed(
+            reason = (
                 f"No valid response from {self.client.host}:{self.client.port} "
                 f"after {self._consecutive_failures} consecutive failures"
             )
+            self.last_failure_reason = reason
+            raise UpdateFailed(reason)
 
         self._consecutive_failures = 0
+        self.last_successful_update = datetime.now(UTC)
+        self.last_failure_reason = None
         self._last_good_data = raw
         return raw
 
@@ -509,6 +532,13 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def write_history(self) -> list[dict[str, Any]]:
         """Recent control writes with verify outcomes (newest last)."""
         return list(self._write_history)
+
+    @property
+    def latest_write(self) -> dict[str, Any] | None:
+        """Most recent control write, if any."""
+        if not self._write_history:
+            return None
+        return self._write_history[-1]
 
     async def async_set_battery_control(self, direction: str, power_w: int) -> bool:
         has_storage = bool(self.data and self.data.get("Storage_list"))

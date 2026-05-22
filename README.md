@@ -1,5 +1,9 @@
 # AFERIY PS240 (Local)
 
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
+[![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
+[![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
+
 Home Assistant custom integration for local TCP monitoring and control of an AFERIY PS240 battery.
 
 This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It keeps the original `aecc_battery` integration domain so existing entities, dashboards, and automations do not need to be renamed.
@@ -14,8 +18,11 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Physics-aware filtering for occasional invalid SOC/power readings
 - Home Assistant diagnostics export support
 - Custom AFERIY PS240 icon
+- Connection health and last-command result sensors
 
 ## Install With HACS
+
+[![Add to HACS via My Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=MortUK&repository=Aferiy-PS240-Local-&category=Integration)
 
 1. Open HACS in Home Assistant.
 2. Go to Integrations.
@@ -37,9 +44,25 @@ Copy `custom_components/aecc_battery` into your Home Assistant `config/custom_co
 
 Use a static IP address or DHCP reservation for the battery so Home Assistant can always find it.
 
+## Options
+
+Open the integration options to adjust:
+
+- Extended power range up to 2400 W
+- Polling interval
+- Advanced energy estimate sensors
+
+The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
+
 ## Extended Power
 
 The battery and AECC app may cap local control at 800 W unless the matching app-side output limit is increased. Only enable the extended power option if the battery installation and circuit are suitable for the higher load.
+
+## Documentation
+
+- [Entities](docs/entities.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Changelog](CHANGELOG.md)
 
 ## Attribution
 

@@ -10,18 +10,22 @@ from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
+    CONF_ADVANCED_ENERGY_SENSORS,
     CONF_EXTENDED_POWER,
     CONF_HOST,
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_NAME,
+    CONF_POLL_INTERVAL,
     CONF_PORT,
     DEFAULT_HOST,
     DEFAULT_MANUFACTURER,
     DEFAULT_NAME,
     DEFAULT_PORT,
     DOMAIN,
+    MIN_POLL_INTERVAL,
     KNOWN_BRANDS,
+    POLL_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,6 +91,8 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             new_options = {
                 CONF_EXTENDED_POWER: user_input.get(CONF_EXTENDED_POWER, False),
+                CONF_ADVANCED_ENERGY_SENSORS: user_input.get(CONF_ADVANCED_ENERGY_SENSORS, False),
+                CONF_POLL_INTERVAL: user_input.get(CONF_POLL_INTERVAL, POLL_INTERVAL),
             }
             self.hass.config_entries.async_update_entry(
                 self._entry,
@@ -115,6 +121,14 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
                 ),
                 vol.Optional(CONF_MODEL, default=current.get(CONF_MODEL, "")): str,
                 vol.Optional(CONF_EXTENDED_POWER, default=current_options.get(CONF_EXTENDED_POWER, False)): bool,
+                vol.Optional(
+                    CONF_ADVANCED_ENERGY_SENSORS,
+                    default=current_options.get(CONF_ADVANCED_ENERGY_SENSORS, False),
+                ): bool,
+                vol.Optional(
+                    CONF_POLL_INTERVAL,
+                    default=current_options.get(CONF_POLL_INTERVAL, POLL_INTERVAL),
+                ): vol.All(vol.Coerce(int), vol.Range(min=MIN_POLL_INTERVAL, max=300)),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)
