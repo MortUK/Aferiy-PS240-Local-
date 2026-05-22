@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.11
+
+- Sorted manifest keys for Hassfest validation.
+
 ## 1.4.10
 
 - Declared the optional recorder integration relationship for Hassfest validation.
