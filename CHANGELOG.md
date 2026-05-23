@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.15
+
+- Synced local PS240 control fixes from the live Home Assistant install.
+- Updated estimated house demand to use AECC grid meter flow, including signed grid history.
+- Restored extended-power compatibility for existing local entries.
+
 ## 1.4.14
 
 - Added backwards-compatible power option constants for mixed local upgrades.

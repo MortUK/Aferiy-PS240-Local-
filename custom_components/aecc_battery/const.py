@@ -19,11 +19,19 @@ DEFAULT_NAME = "AFERIY PS240 (Local)"
 DEFAULT_MANUFACTURER = "AFERIY"
 DEFAULT_MODEL = "PS240"
 DEFAULT_TIMEOUT = 5  # seconds
+
+# Polling
 POLL_INTERVAL = 5  # seconds – change this to update faster/slower
 MIN_POLL_INTERVAL = 2  # seconds – hard floor to avoid flooding the device
-MAX_REGISTER_POWER_DEFAULT = 800  # watts – observed reliable local TCP output limit
-PS240_EXPERIMENTAL_MAX_OUTPUT_W = 1200  # watts – exposed for cautious local testing
+
+# Power limits
+MAX_REGISTER_POWER_DEFAULT = 800  # watts – observed reliable local TCP lower/default limit
+PS240_EXPERIMENTAL_MAX_OUTPUT_W = 1200  # watts per unit – exposed for cautious local testing
+
+# Backwards-compatible name used by coordinator.py
 MAX_BATTERY_POWER_W = PS240_EXPERIMENTAL_MAX_OUTPUT_W
+
+# Battery capacity presets
 BATTERY_MODULE_CAPACITY_KWH = 1.958
 DEFAULT_BATTERY_MODULE_COUNT = 3
 DEFAULT_BATTERY_CAPACITY_KWH = round(
@@ -44,21 +52,15 @@ def battery_capacity_preset_label(module_count: int) -> str:
     suffix = "module" if module_count == 1 else "modules"
     return f"{module_count} {suffix} ({capacity:.3f} kWh)"
 
+
 # ─── Sensor cleaning profile ─────────────────────────────────────────────────
 # Per-brand thresholds for the physics-aware SOC cleaner.
 # - soc_zero_reject_during_active_w: reject SOC=0 readings when the absolute
-#   wall-side power exceeds this threshold (battery is clearly in motion, so
-#   SOC cannot have collapsed to 0 instantaneously).
+#   wall-side power exceeds this threshold.
 # - soc_max_rate_pct_per_min: discard SOC readings whose change rate from the
-#   last accepted sample exceeds this. Catches BMS step-jump glitches.
+#   last accepted sample exceeds this.
 # - hold_last_value_seconds: how long an entity may keep returning its last
-#   accepted value after readings start being rejected before going
-#   "unavailable". Hybrid pattern: smooth charts for transient blips, honest
-#   signal for prolonged sensor failure.
-#
-# Lunergy is the known-bad device (sustained SOC=0 lockups during active
-# discharge). Sunpura / others are stable and get a permissive profile that
-# only catches obvious physical impossibilities.
+#   accepted value after readings start being rejected before going unavailable.
 # ──────────────────────────────────────────────────────────────────────────────
 
 CONF_BRAND_PROFILE_KEY = "brand_profile"
@@ -100,36 +102,42 @@ BRAND_PROFILES["Richard Owen"] = BRAND_PROFILES["AFERIY"]
 
 DEFAULT_BRAND_PROFILE: dict[str, float | int] = BRAND_PROFILES["Richard Owen"]
 
-# ─── Control register addresses (confirmed by register scan) ─────────────────
+
+# ─── Control register addresses ───────────────────────────────────────────────
 REG_EMS_ENABLE = "3000"  # 0 = off, 1 = on
-REG_SCHEDULE_MODE = "3020"  # Schedule mode (6 = custom schedule)
+REG_SCHEDULE_MODE = "3020"  # Schedule mode; 6 = custom schedule
 REG_AI_SMART_CHARGE = "3021"  # 0 = off, 1 = on
 REG_AI_SMART_DISC = "3022"  # 0 = off, 1 = on
 REG_CUSTOM_MODE = "3030"  # 0 = off, 1 = on
 
-# Power setpoint, time-slot format (confirmed from scan):
+# Power setpoint, time-slot format:
 #   "timeSwitch,startHH:MM,endHH:MM,powerW,0,mode,0,0,0,chargingSOC,dischargingSOC"
 #   e.g. "1,00:00,23:59,800,0,6,0,0,0,100,10"     (discharge at 800 W)
 #        "1,00:00,23:59,-800,0,6,0,0,0,100,10"    (charge at 800 W)
 #        "0,00:00,00:00,0,0,0,0,0,0,100,10"       (idle / disabled)
 REG_CONTROL_TIME1 = "3003"  # First active time slot
 
-REG_MIN_SOC = "3023"  # Minimum discharge SOC  (confirmed: currently 10)
-REG_MAX_SOC = "3024"  # Maximum charge SOC     (confirmed: currently 98)
-REG_MAX_FEED_POWER = "3039"  # Max feed power in W (read for diagnostics; not written by default)
+REG_MIN_SOC = "3023"  # Minimum discharge SOC
+REG_MAX_SOC = "3024"  # Maximum charge SOC
+REG_MAX_FEED_POWER = "3039"  # Max feed power in W; read/write depends on integration logic
 
-# Empty schedule slot - clears the active time slot so the firmware won't
-# auto-re-enable EMS after a disable.
+# Empty schedule slot - clears the active time slot.
 SLOT_DISABLED = "0,00:00,00:00,0,0,0,0,0,0,100,10"
 
-# Work modes (human-readable names for the Select entity)
+
+# ─── Work modes ───────────────────────────────────────────────────────────────
 MODE_SELF_CONSUMPTION = "Self-Consumption (AI)"
 MODE_CUSTOM = "Custom / Manual"
 MODE_DISABLED = "Disabled"
 
 WORK_MODES = [MODE_SELF_CONSUMPTION, MODE_CUSTOM, MODE_DISABLED]
 
-# Register sets for each mode
+# Register sets for each mode.
+#
+# Note:
+# The main coordinator may override Self-Consumption with its own robust
+# async_restore_self_consumption() method. This dictionary is still kept for
+# compatibility with the original integration structure.
 MODE_REGISTERS = {
     MODE_SELF_CONSUMPTION: {
         REG_EMS_ENABLE: "1",

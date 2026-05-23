@@ -121,6 +121,7 @@ _SOLCAST_POWER_NOW_ENTITY = "sensor.solcast_pv_forecast_power_now"
 _SOLCAST_TOMORROW_ENTITY = "sensor.solcast_pv_forecast_forecast_tomorrow"
 _SHELLY_IMPORT_ENTITY = "sensor.shelly_grid_import_power"
 _SHELLY_EXPORT_ENTITY = "sensor.shelly_grid_export_power"
+_GRID_METER_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_grid_meter_power"
 _HOUSE_DEMAND_DAILY_ENTITY = "sensor.house_demand_daily"
 _AC_CHARGING_DAILY_ENTITY = "sensor.aferiy_ac_charging_daily"
 _AWAY_MODE_PERSON_ENTITY = "person.richard_owen"
@@ -176,7 +177,7 @@ def _estimate_house_demand_w(
     hass: HomeAssistant,
     coordinator: AeccBatteryCoordinator,
 ) -> tuple[float, dict[str, Any]]:
-    """Estimate live house demand from PV, battery, and trusted grid flow."""
+    """Estimate live house demand from PV, battery, and AECC grid meter flow."""
     pv_w = _as_float(coordinator.get_value("pv_power"), 0.0) or 0.0
     total_charge_w = _as_float(coordinator.get_value("total_charge_power"), 0.0) or 0.0
     battery_charging_w = _as_float(coordinator.get_value("battery_charging_power"), 0.0) or 0.0
@@ -195,8 +196,9 @@ def _estimate_house_demand_w(
         _as_float(coordinator.get_value("total_battery_output_power"), 0.0) or 0.0,
         _as_float(coordinator.get_value("battery_discharging_power"), 0.0) or 0.0,
     )
-    import_w = _state_float(hass, _SHELLY_IMPORT_ENTITY, 0.0) or 0.0
-    export_w = _state_float(hass, _SHELLY_EXPORT_ENTITY, 0.0) or 0.0
+    grid_w = _as_float(coordinator.get_value("grid_power"), 0.0) or 0.0
+    import_w = max(0.0, grid_w)
+    export_w = max(0.0, -grid_w)
 
     raw_house_demand_w = pv_w + import_w + discharge_w - charge_w - export_w
     house_demand_w = max(0.0, raw_house_demand_w)
@@ -204,6 +206,7 @@ def _estimate_house_demand_w(
     attrs = {
         "formula": "pv + grid_import + battery_discharge - battery_charge - grid_export",
         "pv_power_w": round(pv_w, 1),
+        "grid_meter_power_w": round(grid_w, 1),
         "grid_import_w": round(import_w, 1),
         "grid_export_w": round(export_w, 1),
         "battery_charge_w": round(charge_w, 1),
@@ -214,8 +217,7 @@ def _estimate_house_demand_w(
         "battery_charging_power_w": round(battery_charging_w, 1),
         "battery_discharge_w": round(discharge_w, 1),
         "raw_house_demand_w": round(raw_house_demand_w, 1),
-        "source_grid_import": _SHELLY_IMPORT_ENTITY,
-        "source_grid_export": _SHELLY_EXPORT_ENTITY,
+        "source_grid_meter": _GRID_METER_POWER_ENTITY_FALLBACK,
         "status": "estimated" if raw_house_demand_w >= 0 else "clamped_to_zero",
     }
     return round(house_demand_w, 1), attrs
@@ -564,7 +566,7 @@ class AeccBatteryPowerSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEn
 
 
 class AeccEstimatedHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
-    """Estimated whole-home demand from PV, battery flow, and Shelly grid flow."""
+    """Estimated whole-home demand from PV, battery flow, and AECC grid flow."""
 
     _attr_has_entity_name = True
     _attr_name = "Estimated House Demand"
@@ -1715,8 +1717,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                 "total_battery_output_power",
                 _TOTAL_BATTERY_OUTPUT_POWER_ENTITY_FALLBACK,
             ),
-            "grid_import": _SHELLY_IMPORT_ENTITY,
-            "grid_export": _SHELLY_EXPORT_ENTITY,
+            "grid_power": self._history_entity_id("grid_power", _GRID_METER_POWER_ENTITY_FALLBACK),
         }
 
     def _history_entity_id(self, unique_key: str, fallback: str) -> str:
@@ -1909,7 +1910,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
         end: datetime,
     ) -> tuple[dict[int, dict[str, float]], float, float] | None:
         series = {
-            key: cls._normalised_power_history(states, start, end)
+            key: cls._normalised_power_history(states, start, end, allow_negative=key == "grid_power")
             for key, states in histories.items()
         }
         if not any(series.values()):
@@ -1959,7 +1960,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
         end: datetime,
     ) -> tuple[float, float] | None:
         series = {
-            key: cls._normalised_power_history(states, start, end)
+            key: cls._normalised_power_history(states, start, end, allow_negative=key == "grid_power")
             for key, states in histories.items()
         }
         if not any(series.values()):
@@ -1999,6 +2000,8 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
         states: list[Any],
         start: datetime,
         end: datetime,
+        *,
+        allow_negative: bool = False,
     ) -> list[tuple[datetime, float]]:
         points: list[tuple[datetime, float]] = []
         starting_value: float | None = None
@@ -2013,7 +2016,8 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
             if unit == "kw":
                 value *= 1000
 
-            value = max(0.0, value)
+            if not allow_negative:
+                value = max(0.0, value)
             sample_time = state.last_updated.astimezone(UTC)
             if sample_time <= start:
                 starting_value = value
@@ -2046,12 +2050,20 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
             values.get("total_battery_output_power", 0.0),
             values.get("battery_discharging_power", 0.0),
         )
+        grid_power = values.get("grid_power")
+        if grid_power is not None:
+            grid_import_w = max(0.0, grid_power)
+            grid_export_w = max(0.0, -grid_power)
+        else:
+            grid_import_w = values.get("grid_import", 0.0)
+            grid_export_w = values.get("grid_export", 0.0)
+
         raw_demand_w = (
             values.get("pv_power", 0.0)
-            + values.get("grid_import", 0.0)
+            + grid_import_w
             + discharge_w
             - charge_w
-            - values.get("grid_export", 0.0)
+            - grid_export_w
         )
         return max(0.0, raw_demand_w)
 

@@ -14,19 +14,15 @@ from homeassistant.util import slugify
 
 from .const import (
     BRAND_PROFILES,
-    CONF_ADVANCED_ENERGY_SENSORS,
+    CONF_EXTENDED_POWER,
     CONF_HOST,
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_NAME,
-    CONF_POLL_INTERVAL,
     CONF_PORT,
     DEFAULT_BRAND_PROFILE,
-    DEFAULT_MANUFACTURER,
-    DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
     DOMAIN,
-    POLL_INTERVAL,
 )
 from .coordinator import AeccBatteryCoordinator
 from .diagnostics import _fetch_control_registers
@@ -73,10 +69,16 @@ POWER_FLOW_ENTITY_IDS = (
     "number.aecc_battery_charge_limit",
     "number.aecc_battery_discharge_limit",
     "sensor.aecc_battery_estimated_charge_time",
-    "sensor.aecc_battery_connection_status",
-    "sensor.aecc_battery_last_successful_update",
-    "sensor.aecc_battery_consecutive_poll_failures",
-    "sensor.aecc_battery_last_command_result",
+    "sensor.shelly_grid_import_power",
+    "sensor.shelly_grid_export_power",
+    "sensor.shellypro3em_841fe8916604_phase_a_power",
+    "sensor.aferiy_actual_system_mode",
+    "sensor.aferiy_actual_energy_mode",
+    "sensor.aferiy_actual_power_mode",
+    "sensor.aferiy_actual_ai_mode",
+    "sensor.aferiy_actual_bat_basic_discharge_power",
+    "sensor.aferiy_zero_feed_in",
+    "sensor.aferiy_generation_self_consumption",
 )
 
 POWER_FLOW_ATTRIBUTE_KEYS = (
@@ -115,8 +117,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     host: str = entry.data[CONF_HOST]
     port: int = entry.data[CONF_PORT]
     name: str = entry.data[CONF_NAME]
-    manufacturer: str = entry.data.get(CONF_MANUFACTURER, DEFAULT_MANUFACTURER)
-    model: str = entry.data.get(CONF_MODEL, DEFAULT_MODEL)
+    manufacturer: str = entry.data.get(CONF_MANUFACTURER, "AECC")
+    model: str = entry.data.get(CONF_MODEL, "")
 
     client = AeccTcpClient(host, port, timeout=DEFAULT_TIMEOUT)
     try:
@@ -124,15 +126,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except (TimeoutError, OSError, ConnectionError) as exc:
         raise ConfigEntryNotReady(f"Cannot connect to {host}:{port} - {exc}") from exc
 
-    poll_interval = entry.options.get(CONF_POLL_INTERVAL, POLL_INTERVAL)
+    extended_power = entry.options.get(CONF_EXTENDED_POWER, False)
     brand_profile = BRAND_PROFILES.get(manufacturer, DEFAULT_BRAND_PROFILE)
     coordinator = AeccBatteryCoordinator(
         hass,
         client,
         name,
-        poll_interval=poll_interval,
         manufacturer=manufacturer,
         model=model,
+        extended_power=extended_power,
         brand_profile=brand_profile,
     )
     await coordinator.async_config_entry_first_refresh()
@@ -326,7 +328,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         )
 
     async def async_restore_original_self_consumption(call: ServiceCall) -> None:
-        """Run the stock self-consumption register write."""
+        """Run the original StekkerDeal self-consumption register write."""
         requested_entry_id = call.data.get("entry_id")
 
         coordinators: list[tuple[str, AeccBatteryCoordinator]] = []
@@ -362,8 +364,8 @@ def _async_register_services(hass: HomeAssistant) -> None:
                         "3030": "0",
                     },
                     "note": (
-                        "Stock self-consumption write; leaves schedule mode "
-                        "and manual slot unchanged."
+                        "Original StekkerDeal self-consumption write; leaves "
+                        "schedule mode and manual slot unchanged."
                     ),
                 },
             )

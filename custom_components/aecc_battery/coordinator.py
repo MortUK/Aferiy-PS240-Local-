@@ -16,7 +16,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .cleaners import CLEANERS, CleanerContext
 from .const import (
     DEFAULT_BRAND_PROFILE,
+    DEFAULT_BATTERY_CAPACITY_KWH,
     DOMAIN,
+    MAX_BATTERY_POWER_W,
     MAX_REGISTER_POWER_DEFAULT,
     MIN_POLL_INTERVAL,
     MODE_CUSTOM,
@@ -24,7 +26,6 @@ from .const import (
     MODE_REGISTERS,
     MODE_SELF_CONSUMPTION,
     POLL_INTERVAL,
-    DEFAULT_BATTERY_CAPACITY_KWH,
     REG_AI_SMART_CHARGE,
     REG_AI_SMART_DISC,
     REG_CONTROL_TIME1,
@@ -42,15 +43,14 @@ _LOGGER = logging.getLogger(__name__)
 
 # ── Unified field mapping ─────────────────────────────────────────────────────
 # Maps canonical sensor keys to (source, field_name, scale) tuples.
-# SSumInfoList is preferred for combined multi-unit values when available.
-# Storage_list is used for local/master-unit fields and as a fallback.
+# Storage_list is tried first (Sunpura), then SSumInfoList (Lunergy fallback).
 # Storage_list power values are 10x scaled; SSumInfoList values are in watts.
 # ──────────────────────────────────────────────────────────────────────────────
 
 _FIELD_MAP: dict[str, list[tuple[str, str, float]]] = {
     "battery_soc": [
-        ("summary", "AverageBatteryAverageSOC", 1.0),
         ("storage", "BatterySoc", 1.0),
+        ("summary", "AverageBatteryAverageSOC", 1.0),
     ],
     "average_battery_soc": [
         ("summary", "AverageBatteryAverageSOC", 1.0),
@@ -121,6 +121,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         poll_interval: int = POLL_INTERVAL,
         manufacturer: str = "AECC",
         model: str = "",
+        extended_power: bool = False,
         brand_profile: dict[str, Any] | None = None,
     ) -> None:
         self.client = client
@@ -144,7 +145,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
         self._commanded_min_soc: int = 10
         self._commanded_max_soc: int = 100
-        self.max_register_power: int = MAX_REGISTER_POWER_DEFAULT
+        self.extended_power: bool = extended_power
+        self.max_register_power: int = MAX_BATTERY_POWER_W if extended_power else MAX_REGISTER_POWER_DEFAULT
         self.initial_min_soc: int | None = None
         self.initial_max_soc: int | None = None
         self.initial_max_feed_power: int | None = None
@@ -260,7 +262,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             manufacturer=self._manufacturer,
             model=self._model or None,
             sw_version=self.firmware_version,
-            configuration_url="https://github.com/MortUK/Aferiy-PS240-Local-",
+            configuration_url="https://github.com/StekkerDeal/aecc-battery-local",
         )
 
     @property
@@ -560,12 +562,15 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_CONTROL_TIME1: slot1,
         }
 
-        if power_w > MAX_REGISTER_POWER_DEFAULT:
+        if self.extended_power:
+            payload[REG_MAX_FEED_POWER] = str(MAX_BATTERY_POWER_W)
+
+        if power_w > MAX_REGISTER_POWER_DEFAULT and not self.extended_power:
             _LOGGER.warning(
-                "Power %d W is above the observed reliable PS240 local output limit of %d W. "
-                "The command will be sent without changing register 3039.",
+                "Power %d W exceeds default 800 W limit. "
+                "Enable 'Extended power range' in integration options to allow up to %d W.",
                 power_w,
-                MAX_REGISTER_POWER_DEFAULT,
+                MAX_BATTERY_POWER_W,
             )
 
         _LOGGER.info(
@@ -645,12 +650,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return success
 
     async def async_restore_original_self_consumption(self) -> bool:
-        """Return to the stock self-consumption register set.
-
-        This intentionally leaves the manual time slot and schedule mode alone.
-        It is useful as a diagnostic path when testing whether the more robust
-        restore sequence is also enforcing zero-feed behaviour.
-        """
+        """Return to the stock self-consumption register set."""
         payload = {
             REG_EMS_ENABLE: "1",
             REG_AI_SMART_CHARGE: "1",
@@ -658,15 +658,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_CUSTOM_MODE: "0",
         }
 
-        _LOGGER.info(
-            "SET stock self-consumption -> registers=%s",
-            payload,
-        )
+        _LOGGER.info("SET stock self-consumption -> registers=%s", payload)
 
-        success = await self._logged_write(
-            payload,
-            "self_consumption(stock)",
-        )
+        success = await self._logged_write(payload, "self_consumption(stock)")
         if success:
             self._commanded_work_mode = MODE_SELF_CONSUMPTION
             self._commanded_direction = "Idle"
