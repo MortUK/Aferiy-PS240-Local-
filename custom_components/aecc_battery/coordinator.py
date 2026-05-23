@@ -614,7 +614,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         restore_ai_payload = {
             REG_EMS_ENABLE: "1",
             REG_SCHEDULE_MODE: "0",
-            REG_AI_SMART_CHARGE: "1",
+            REG_AI_SMART_CHARGE: "0",
             REG_AI_SMART_DISC: "1",
             REG_CUSTOM_MODE: "0",
             REG_CONTROL_TIME1: SLOT_DISABLED,

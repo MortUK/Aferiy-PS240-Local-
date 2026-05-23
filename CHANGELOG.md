@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.14
+
+- Added backwards-compatible power option constants for mixed local upgrades.
+- Kept the PS240 self-consumption restore path aligned with the live local fix.
+
 ## 1.4.13
 
 - Simplified the setup and reconfigure forms for the AFERIY PS240.

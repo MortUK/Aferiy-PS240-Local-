@@ -1,6 +1,6 @@
 [project]
 name = "aferiy-ps240-local"
-version = "1.4.13"
+version = "1.4.14"
 description = "Home Assistant custom integration for local TCP monitoring and control of an AFERIY PS240 battery"
 requires-python = ">=3.12"
 dependencies = [
