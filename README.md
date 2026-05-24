@@ -44,6 +44,14 @@ Copy `custom_components/aecc_battery` into your Home Assistant `config/custom_co
 
 Use a static IP address or DHCP reservation for the battery so Home Assistant can always find it.
 
+### Multiple PS240 Units
+
+If you have more than one PS240 in the same AFERIY/AEC Cloud system, add only the master unit to this integration.
+
+The master controls the slave units. You do not need a separate local integration entry for each battery. In testing, one local connection to the master has been more reliable than trying to connect to every unit.
+
+System-level readings are reported through the master. Battery SOC is the average state of charge across all connected units, matching the behaviour shown in the AEC Cloud app.
+
 ## Options
 
 Open the integration options to adjust:
@@ -52,6 +60,24 @@ Open the integration options to adjust:
 - Advanced energy estimate sensors
 
 The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
+
+### Smart Overnight Charging Target
+
+The optional Recommended Overnight SOC sensor is aimed at users with cheap overnight electricity, such as Octopus Go or similar tariffs.
+
+It estimates the battery percentage needed at the end of the overnight charging window. The estimate uses the configured battery capacity, recent household energy use, expected solar generation, and the morning period before useful solar production begins. If Solcast forecast sensors are available, they can be used as the solar forecast source.
+
+Holiday or away mode can reduce the recommended target because normal household demand is expected to be lower. Morning shortfall shows the estimated energy gap between the end of the cheap-rate window and the point where solar should start helping. The target percentage is calculated from the energy needed to cover that gap, rounded to a practical SOC value and kept inside sensible battery limits.
+
+For this entity to work well, Home Assistant needs suitable energy history and, ideally, Solcast solar forecast sensors. Without those inputs, the estimate may fall back to conservative defaults or report that there is not enough data.
+
+### Solar Clipping And Export
+
+The PS240 can clip or hold back surplus PV when the battery is full or when the system is running in zero-feed behaviour.
+
+Bypassing this PV clipping has been possible in testing, but the mode switching became unreliable. The current self-consumption switching is deliberately conservative because it reliably returns the battery to a safe local operating mode after charging or idling.
+
+At the moment, bypassing clipping/export reliably is not supported by this integration. It may become possible in the future, but it may also need a firmware or app/API update from AFERIY before it can be made stable.
 
 ## Output Limit Notes
 

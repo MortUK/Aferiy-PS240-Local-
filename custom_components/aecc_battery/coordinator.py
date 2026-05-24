@@ -526,6 +526,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         _LOGGER.debug("SET %s response: %s", operation, resp)
         entry["verify_result"] = await self._verify_write(payload, operation)
+        if entry["verify_result"] is not None and any(
+            item.get("match") is False for item in entry["verify_result"]
+        ):
+            _LOGGER.warning("SET %s failed write-back verification", operation)
+            return False
         return True
 
     @property
@@ -629,25 +634,33 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "SET robust self-consumption: clear manual slot then restore AI/EMS"
         )
 
-        ok1 = await self._logged_write(
-            clear_manual_payload,
-            "self_consumption(clear_manual_slot)",
-        )
+        for attempt in range(1, 4):
+            await self._logged_write(
+                clear_manual_payload,
+                f"self_consumption(clear_manual_slot #{attempt})",
+            )
 
-        await asyncio.sleep(0.5)
+            await asyncio.sleep(0.75)
 
-        ok2 = await self._logged_write(
-            restore_ai_payload,
-            "self_consumption(restore_ai_ems)",
-        )
+            ok = await self._logged_write(
+                restore_ai_payload,
+                f"self_consumption(restore_ai_ems #{attempt})",
+            )
 
-        success = ok1 and ok2
-        if success:
-            self._commanded_work_mode = MODE_SELF_CONSUMPTION
-            self._commanded_direction = "Idle"
-            self.commanded_operating_mode = "Self-Consumption"
+            if ok:
+                self._commanded_work_mode = MODE_SELF_CONSUMPTION
+                self._commanded_direction = "Idle"
+                self.commanded_operating_mode = "Self-Consumption"
+                return True
 
-        return success
+            if attempt < 3:
+                _LOGGER.warning(
+                    "Self-consumption restore attempt %d failed; retrying",
+                    attempt,
+                )
+                await asyncio.sleep(2)
+
+        return False
 
     async def async_restore_original_self_consumption(self) -> bool:
         """Return to the stock self-consumption register set."""

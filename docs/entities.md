@@ -35,3 +35,19 @@ Enable them from the integration options if you want:
 - Will Fill Today
 - Runtime at Current House Demand
 - Recommended Overnight SOC
+
+### Recommended Overnight SOC
+
+Recommended Overnight SOC is designed for homes with a cheap overnight tariff, for example Octopus Go. It suggests the battery target to charge to overnight, so the battery has enough energy for the morning without always charging to 100%.
+
+The calculation can use:
+
+- The configured usable battery capacity
+- Recent household energy use from Home Assistant history
+- Solar forecast data, ideally from Solcast
+- The expected morning period before solar generation is useful
+- Holiday or away mode, where household demand may be lower than normal
+
+Morning shortfall is the estimated energy needed after the cheap-rate window ends and before solar should start covering the house. The recommended target percentage is calculated from that shortfall, the battery capacity, recent use, and the solar forecast. It is then kept within practical SOC limits.
+
+For best results, enable the advanced estimate sensors, configure the battery capacity correctly, keep Home Assistant recorder history available, and provide Solcast forecast sensors. Without enough data the sensor may use conservative defaults or show that it cannot calculate a reliable target.
