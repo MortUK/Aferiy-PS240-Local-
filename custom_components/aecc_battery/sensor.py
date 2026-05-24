@@ -42,14 +42,6 @@ _LOGGER = logging.getLogger(__name__)
 # (key, name, canonical_key, unit, icon, is_power)
 _SENSORS = [
     ("ac_charging_power", "AC Charging Power", "ac_charging_power", UnitOfPower.WATT, "mdi:power-plug", True),
-    (
-        "battery_discharging_power",
-        "Battery Discharging Power",
-        "battery_discharging_power",
-        UnitOfPower.WATT,
-        "mdi:battery-arrow-down",
-        True,
-    ),
     ("battery_soc", "Battery SOC", "battery_soc", PERCENTAGE, "mdi:battery", False),
     (
         "system_average_battery_soc",
@@ -68,11 +60,7 @@ _SENSORS = [
         False,
     ),
     ("pv_power", "PV Power", "pv_power", UnitOfPower.WATT, "mdi:solar-power", True),
-    ("pv_charging_power", "PV Charging Power", "pv_charging_power", UnitOfPower.WATT, "mdi:solar-panel", True),
     ("grid_power", "Grid / Meter Power", "grid_power", UnitOfPower.WATT, "mdi:transmission-tower", True),
-    ("backup_power", "Backup Power", "backup_power", UnitOfPower.WATT, "mdi:power-plug-battery", True),
-    ("pv1_power", "PV String 1 Power", "pv1_power", UnitOfPower.WATT, "mdi:solar-panel", True),
-    ("pv2_power", "PV String 2 Power", "pv2_power", UnitOfPower.WATT, "mdi:solar-panel", True),
     (
         "total_grid_output_power",
         "Total Grid Output Power",
@@ -257,7 +245,6 @@ async def async_setup_entry(
 
     entities.append(AeccGridExportSensor(coordinator, config_entry))
     entities.append(AeccTotalBatteryOutputPowerSensor(coordinator, config_entry))
-    entities.append(AeccBatteryPowerSensor(coordinator, config_entry))
     entities.append(AeccBatteryStatusSensor(coordinator, config_entry))
     entities.append(AeccConnectionStatusSensor(coordinator, config_entry))
     entities.append(AeccLastSuccessfulUpdateSensor(coordinator, config_entry))
@@ -266,8 +253,6 @@ async def async_setup_entry(
 
     if config_entry.options.get(CONF_ADVANCED_ENERGY_SENSORS, False):
         entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
-        entities.append(AeccEstimatedChargeTimeSensor(coordinator, config_entry))
-        entities.append(AeccWillFillTodaySensor(coordinator, config_entry))
         entities.append(AeccRuntimeAtCurrentHouseDemandSensor(coordinator, config_entry))
         entities.append(AeccRecommendedOvernightSocSensor(coordinator, config_entry))
 
@@ -502,7 +487,7 @@ class AeccTotalBatteryOutputPowerSensor(CoordinatorEntity[AeccBatteryCoordinator
     """
 
     _attr_has_entity_name = True
-    _attr_name = "Total Battery Output Power"
+    _attr_name = "Battery Output"
     _attr_icon = "mdi:battery-arrow-down"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -589,7 +574,7 @@ class AeccEstimatedHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordinator], 
     """Estimated whole-home demand from PV, battery flow, and AECC grid flow."""
 
     _attr_has_entity_name = True
-    _attr_name = "Estimated House Demand"
+    _attr_name = "House Demand"
     _attr_icon = "mdi:home-lightning-bolt"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -1317,7 +1302,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
     """Estimated runtime until reserve using recent house-demand history."""
 
     _attr_has_entity_name = True
-    _attr_name = "Runtime Estimate"
+    _attr_name = "Runtime Left"
     _attr_icon = "mdi:battery-clock"
 
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
@@ -2381,7 +2366,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor):
             "ac_charging_daily_kwh": round(ac_daily_kwh, 3),
             "net_meter_house_demand_kwh": round(net_meter_kwh, 3) if net_meter_kwh is not None else None,
             "ac_charging_note": (
-                "Recorder history uses Estimated House Demand, where battery AC charging is already subtracted. "
+                "Recorder history uses House Demand, where battery AC charging is already subtracted. "
                 "The daily-meter fallback subtracts AFERIY AC charging as a guard."
             ),
         }

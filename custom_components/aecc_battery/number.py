@@ -1,8 +1,8 @@
 """Number platform - separate charge/discharge power sliders, Min SOC, Max SOC.
 
 Patched behaviour:
-- Charge Power Target is passive: stores desired charge power only.
-- Discharge Power Target is passive: stores desired discharge power only.
+- Charge Power is passive: stores desired charge power only.
+- Discharge Power is passive: stores desired discharge power only.
 - Sliders do NOT send charge/discharge commands by themselves.
 - Operating Mode applies the selected value.
 """
@@ -146,7 +146,7 @@ class AeccChargePowerSlider(AeccPassivePowerSlider):
     The AFERIY PS240 appears to clamp lower requests to 800 W per unit.
     """
 
-    _attr_name = "Charge Power Target"
+    _attr_name = "Charge Power"
     _attr_icon = "mdi:battery-arrow-up"
     _attr_native_min_value = MAX_REGISTER_POWER_DEFAULT
     _attr_native_max_value = PS240_EXPERIMENTAL_MAX_OUTPUT_W
@@ -165,7 +165,7 @@ class AeccDischargePowerSlider(AeccPassivePowerSlider):
     Discharge is kept at 800–1200 W per unit.
     """
 
-    _attr_name = "Discharge Power Target"
+    _attr_name = "Discharge Power"
     _attr_icon = "mdi:battery-arrow-down"
     _attr_native_min_value = MAX_REGISTER_POWER_DEFAULT
     _attr_native_max_value = PS240_EXPERIMENTAL_MAX_OUTPUT_W

@@ -650,7 +650,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if ok:
                 self._commanded_work_mode = MODE_SELF_CONSUMPTION
                 self._commanded_direction = "Idle"
-                self.commanded_operating_mode = "Self-Consumption"
+                self.commanded_operating_mode = "Self-Gen/Zero Export"
                 return True
 
             if attempt < 3:
@@ -677,7 +677,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if success:
             self._commanded_work_mode = MODE_SELF_CONSUMPTION
             self._commanded_direction = "Idle"
-            self.commanded_operating_mode = "Self-Consumption"
+            self.commanded_operating_mode = "Self-Gen/Zero Export"
 
         return success
 
@@ -703,7 +703,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if success:
             self._commanded_work_mode = MODE_SELF_CONSUMPTION
             self._commanded_direction = "Idle"
-            self.commanded_operating_mode = "Self-Consumption"
+            self.commanded_operating_mode = "Self-Gen/Zero Export"
 
         return success
 

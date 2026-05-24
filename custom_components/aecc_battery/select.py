@@ -26,7 +26,8 @@ from .coordinator import AeccBatteryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-OPERATING_MODE_OPTIONS = ["Self-Consumption", "Idle", "Charge", "Discharge"]
+OPERATING_MODE_SELF_GEN = "Self-Gen/Zero Export"
+OPERATING_MODE_OPTIONS = [OPERATING_MODE_SELF_GEN, "Idle", "Charge", "Discharge"]
 DIRECTION_OPTIONS = ["Charge", "Discharge", "Idle"]
 CAPACITY_PRESET_OPTIONS = [
     battery_capacity_preset_label(module_count)
@@ -72,10 +73,10 @@ def _closest_capacity_preset(capacity_kwh: float) -> str:
 class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectEntity):
     """Single clean operating mode selector.
 
-    Self-Consumption -> robust/safe self-consumption reset
+    Self-Gen/Zero Export -> robust/safe self-consumption reset
     Idle             -> manual/custom idle
-    Charge           -> manual/custom charge using Charge Power Target
-    Discharge        -> manual/custom discharge using Discharge Power Target
+    Charge           -> manual/custom charge using Charge Power
+    Discharge        -> manual/custom discharge using Discharge Power
     """
 
     _attr_icon = "mdi:battery-sync"
@@ -102,7 +103,7 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
         direction = self.coordinator.commanded_direction or "Idle"
 
         if work_mode == MODE_SELF_CONSUMPTION:
-            return "Self-Consumption"
+            return OPERATING_MODE_SELF_GEN
 
         if direction in OPERATING_MODE_OPTIONS:
             return direction
@@ -116,16 +117,16 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
     async def async_select_option(self, option: str) -> None:
         _LOGGER.info("User selected operating mode: %s", option)
 
-        if option == "Self-Consumption":
+        if option in (OPERATING_MODE_SELF_GEN, "Self-Consumption"):
             success = await self.coordinator.async_set_work_mode(MODE_SELF_CONSUMPTION)
             if success:
                 self.coordinator.commanded_direction = "Idle"
                 self.coordinator.commanded_work_mode = MODE_SELF_CONSUMPTION
-                self.coordinator.commanded_operating_mode = "Self-Consumption"
+                self.coordinator.commanded_operating_mode = OPERATING_MODE_SELF_GEN
                 self.coordinator.async_set_updated_data(self.coordinator.data or {})
                 self.async_write_ha_state()
             else:
-                _LOGGER.error("Failed to set operating mode to Self-Consumption")
+                _LOGGER.error("Failed to set operating mode to Self-Gen/Zero Export")
             return
 
         if option == "Idle":
@@ -287,7 +288,7 @@ class AeccWorkModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectEntity
 
             if option == MODE_SELF_CONSUMPTION:
                 self.coordinator.commanded_direction = "Idle"
-                self.coordinator.commanded_operating_mode = "Self-Consumption"
+                self.coordinator.commanded_operating_mode = OPERATING_MODE_SELF_GEN
             else:
                 self.coordinator.commanded_operating_mode = None
 
