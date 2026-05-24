@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.16
+
+- Added configurable off-peak tariff start and end times, defaulting to Octopus Go 23:30-05:30.
+- Updated the recommended overnight SOC and morning shortfall calculations to use the configured off-peak window.
+- Added a diagnostic schedule-3 self-consumption restore service for export/clipping testing without changing the stable Self mode.
+- Cleaned up duplicate or unused dashboard entities while keeping internal raw values available for calculations.
+- Renamed the main PS240 controls and estimates for a cleaner Home Assistant UI.
+
 ## 1.4.15
 
 - Synced local PS240 control fixes from the live Home Assistant install.
