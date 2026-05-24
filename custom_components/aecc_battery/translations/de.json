@@ -34,16 +34,23 @@
           "port": "TCP-Port",
           "name": "Gerätename",
           "advanced_energy_sensors": "Erweiterte Energie-Schätzsensoren",
-          "poll_interval": "Abfrageintervall"
+          "poll_interval": "Abfrageintervall",
+          "tariff_preset": "Niedertarif-Voreinstellung",
+          "off_peak_start": "Niedertarif-Startzeit",
+          "off_peak_end": "Niedertarif-Endzeit"
         },
         "data_description": {
           "advanced_energy_sensors": "Fügt optionale Schätzsensoren hinzu, die externe Netz-, Solarprognose- und Verbrauchsdaten verwenden können.",
-          "poll_interval": "Wie oft die Batterie lokal abgefragt wird, in Sekunden."
+          "poll_interval": "Wie oft die Batterie lokal abgefragt wird, in Sekunden.",
+          "tariff_preset": "Standard ist Octopus Go. Wählen Sie custom, wenn Ihr günstiges Zeitfenster anders ist.",
+          "off_peak_start": "Beginn des günstigen Ladezeitfensters im 24-Stunden-Format HH:MM.",
+          "off_peak_end": "Ende des günstigen Ladezeitfensters im 24-Stunden-Format HH:MM. Die Morgen-Shortfall-Schätzung beginnt ab dieser Zeit."
         }
       }
     },
     "error": {
       "cannot_connect": "Verbindung nicht möglich. Prüfen Sie IP-Adresse, Port und ob die Batterie online ist.",
+      "invalid_time": "24-Stunden-Format HH:MM verwenden, zum Beispiel 23:30 oder 05:30.",
       "unknown": "Unerwarteter Fehler. Details im Home Assistant-Protokoll."
     }
   }

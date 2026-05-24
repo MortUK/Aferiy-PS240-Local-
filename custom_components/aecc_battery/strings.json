@@ -34,16 +34,23 @@
           "port": "TCP Port",
           "name": "Device Name",
           "advanced_energy_sensors": "Advanced energy estimate sensors",
-          "poll_interval": "Polling interval"
+          "poll_interval": "Polling interval",
+          "tariff_preset": "Off-peak tariff preset",
+          "off_peak_start": "Off-peak start time",
+          "off_peak_end": "Off-peak end time"
         },
         "data_description": {
           "advanced_energy_sensors": "Adds optional estimate sensors that can use external grid, solar forecast, and household demand entities. Leave disabled for the clean core battery integration.",
-          "poll_interval": "How often to poll the battery locally, in seconds. Lower values update faster but create more traffic."
+          "poll_interval": "How often to poll the battery locally, in seconds. Lower values update faster but create more traffic.",
+          "tariff_preset": "Defaults to Octopus Go. Choose custom if your cheap-rate window is different.",
+          "off_peak_start": "Start of your cheap-rate charging window in 24-hour HH:MM format.",
+          "off_peak_end": "End of your cheap-rate charging window in 24-hour HH:MM format. The morning shortfall estimate starts from this time."
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect - check the IP, port, and that the battery is online.",
+      "invalid_time": "Use 24-hour HH:MM format, for example 23:30 or 05:30.",
       "unknown": "Unexpected error - see the Home Assistant log for details."
     }
   }

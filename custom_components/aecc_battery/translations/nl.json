@@ -34,16 +34,23 @@
           "port": "TCP-poort",
           "name": "Apparaatnaam",
           "advanced_energy_sensors": "Geavanceerde energie-inschattingssensoren",
-          "poll_interval": "Pollinginterval"
+          "poll_interval": "Pollinginterval",
+          "tariff_preset": "Daluren-tariefpreset",
+          "off_peak_start": "Starttijd daluren",
+          "off_peak_end": "Eindtijd daluren"
         },
         "data_description": {
           "advanced_energy_sensors": "Voegt optionele inschattingssensoren toe die externe net-, zonneprognose- en huishoudverbruik-entiteiten kunnen gebruiken.",
-          "poll_interval": "Hoe vaak de batterij lokaal wordt uitgelezen, in seconden."
+          "poll_interval": "Hoe vaak de batterij lokaal wordt uitgelezen, in seconden.",
+          "tariff_preset": "Standaard Octopus Go. Kies custom als jouw goedkope tariefvenster anders is.",
+          "off_peak_start": "Begin van je goedkope laadvenster in 24-uurs HH:MM-formaat.",
+          "off_peak_end": "Einde van je goedkope laadvenster in 24-uurs HH:MM-formaat. De ochtendtekortschatting begint vanaf deze tijd."
         }
       }
     },
     "error": {
       "cannot_connect": "Kan niet verbinden. Controleer het IP-adres, de poort en of de batterij online is.",
+      "invalid_time": "Gebruik 24-uurs HH:MM-formaat, bijvoorbeeld 23:30 of 05:30.",
       "unknown": "Onverwachte fout. Zie het Home Assistant-logboek voor details."
     }
   }

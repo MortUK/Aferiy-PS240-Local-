@@ -34,16 +34,23 @@
           "port": "Port TCP",
           "name": "Nom de l'appareil",
           "advanced_energy_sensors": "Capteurs avancés d'estimation énergétique",
-          "poll_interval": "Intervalle d'interrogation"
+          "poll_interval": "Intervalle d'interrogation",
+          "tariff_preset": "Préréglage tarif heures creuses",
+          "off_peak_start": "Début des heures creuses",
+          "off_peak_end": "Fin des heures creuses"
         },
         "data_description": {
           "advanced_energy_sensors": "Ajoute des capteurs d'estimation optionnels pouvant utiliser des entités externes de réseau, prévision solaire et demande du foyer.",
-          "poll_interval": "Fréquence d'interrogation locale de la batterie, en secondes."
+          "poll_interval": "Fréquence d'interrogation locale de la batterie, en secondes.",
+          "tariff_preset": "Octopus Go par défaut. Choisissez custom si votre plage économique est différente.",
+          "off_peak_start": "Début de votre plage de charge économique au format 24 h HH:MM.",
+          "off_peak_end": "Fin de votre plage de charge économique au format 24 h HH:MM. L'estimation du manque du matin commence à cette heure."
         }
       }
     },
     "error": {
       "cannot_connect": "Connexion impossible. Vérifiez l'adresse IP, le port et que la batterie est en ligne.",
+      "invalid_time": "Utilisez le format 24 h HH:MM, par exemple 23:30 ou 05:30.",
       "unknown": "Erreur inattendue. Consultez le journal Home Assistant pour plus de détails."
     }
   }

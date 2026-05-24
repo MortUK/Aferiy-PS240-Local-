@@ -11,6 +11,9 @@ CONF_ADVANCED_ENERGY_SENSORS = "advanced_energy_sensors"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_MANUFACTURER = "manufacturer"
 CONF_MODEL = "model"
+CONF_TARIFF_PRESET = "tariff_preset"
+CONF_OFF_PEAK_START = "off_peak_start"
+CONF_OFF_PEAK_END = "off_peak_end"
 
 # Default connection values
 DEFAULT_HOST = "192.168.0.1"
@@ -19,6 +22,13 @@ DEFAULT_NAME = "AFERIY PS240 (Local)"
 DEFAULT_MANUFACTURER = "AFERIY"
 DEFAULT_MODEL = "PS240"
 DEFAULT_TIMEOUT = 5  # seconds
+DEFAULT_TARIFF_PRESET = "octopus_go"
+DEFAULT_OFF_PEAK_START = "23:30"
+DEFAULT_OFF_PEAK_END = "05:30"
+TARIFF_PRESETS: dict[str, tuple[str, str]] = {
+    "octopus_go": (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+    "custom": (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+}
 
 # Polling
 POLL_INTERVAL = 5  # seconds – change this to update faster/slower

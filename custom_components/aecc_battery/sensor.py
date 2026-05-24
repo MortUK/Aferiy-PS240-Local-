@@ -23,7 +23,17 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utcnow
 
-from .const import CONF_ADVANCED_ENERGY_SENSORS, DEFAULT_BATTERY_CAPACITY_KWH, DOMAIN
+from .const import (
+    CONF_ADVANCED_ENERGY_SENSORS,
+    CONF_OFF_PEAK_END,
+    CONF_OFF_PEAK_START,
+    CONF_TARIFF_PRESET,
+    DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_OFF_PEAK_END,
+    DEFAULT_OFF_PEAK_START,
+    DEFAULT_TARIFF_PRESET,
+    DOMAIN,
+)
 from .coordinator import AeccBatteryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -144,13 +154,23 @@ _TOTAL_CHARGE_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_total_charge_power"
 _BATTERY_DISCHARGING_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_battery_discharging_power"
 _TOTAL_BATTERY_OUTPUT_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_total_battery_output_power"
 _FULL_SOC = 100.0
-_OVERNIGHT_WINDOW_START_HOUR = 5
-_OVERNIGHT_WINDOW_START_MINUTE = 30
-_OVERNIGHT_WINDOW_END_HOUR = 23
-_OVERNIGHT_WINDOW_END_MINUTE = 30
 _OVERNIGHT_BUFFER_SOC = 4.0
 _DEFAULT_DAILY_HOUSE_DEMAND_KWH = 11.0
 _AWAY_MODE_DAILY_DEMAND_KWH = 9.0
+
+
+def _parse_hhmm(value: Any, default: str) -> tuple[int, int, str]:
+    text = str(value or default).strip()
+    try:
+        hour_text, minute_text = text.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute, f"{hour:02d}:{minute:02d}"
+    except (TypeError, ValueError):
+        pass
+    default_hour, default_minute = (int(part) for part in default.split(":", 1))
+    return default_hour, default_minute, default
 
 
 def _as_float(value: Any, default: float | None = None) -> float | None:
@@ -2243,11 +2263,15 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor):
         reserve_soc = _as_float(getattr(self.coordinator, "_commanded_min_soc", 10), 10.0) or 10.0
         buffer_soc = _OVERNIGHT_BUFFER_SOC
         start, end = self._next_peak_window(now)
+        off_peak_start, off_peak_end, tariff_preset = self._off_peak_window_options()
         fallback_daily_kwh, fallback_attrs = self._fallback_daily_demand_kwh()
         fallback_demand_w = fallback_daily_kwh * 1000 / 24
 
         attrs: dict[str, Any] = {
             "calculated_at": now.isoformat(),
+            "tariff_preset": tariff_preset,
+            "off_peak_start": off_peak_start,
+            "off_peak_end": off_peak_end,
             "target_window_start": start.isoformat(),
             "target_window_end": end.isoformat(),
             "battery_capacity_kwh": round(capacity_kwh, 3),
@@ -2291,7 +2315,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor):
                 "recommended_soc": rounded_target_soc,
                 "status": "full_capacity_recommended" if rounded_target_soc >= 100 else "estimated",
                 "note": (
-                    "Recommendation covers the peak-rate window after 05:30, subtracts expected solar "
+                    f"Recommendation covers the peak-rate window after {off_peak_end}, subtracts expected solar "
                     "by forecast period, and keeps a small buffer above the discharge limit."
                 ),
             }
@@ -2302,19 +2326,31 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor):
     def _round_soc_up(value: float, step: int) -> int:
         return int(math.ceil(max(0.0, value) / step) * step)
 
+    def _off_peak_window_options(self) -> tuple[str, str, str]:
+        options = self._config_entry.options
+        off_peak_start = options.get(CONF_OFF_PEAK_START, DEFAULT_OFF_PEAK_START)
+        off_peak_end = options.get(CONF_OFF_PEAK_END, DEFAULT_OFF_PEAK_END)
+        _, _, off_peak_start = _parse_hhmm(off_peak_start, DEFAULT_OFF_PEAK_START)
+        _, _, off_peak_end = _parse_hhmm(off_peak_end, DEFAULT_OFF_PEAK_END)
+        tariff_preset = options.get(CONF_TARIFF_PRESET, DEFAULT_TARIFF_PRESET)
+        return off_peak_start, off_peak_end, tariff_preset
+
     def _next_peak_window(self, now: datetime) -> tuple[datetime, datetime]:
+        off_peak_start, off_peak_end, _tariff_preset = self._off_peak_window_options()
+        peak_start_hour, peak_start_minute, _ = _parse_hhmm(off_peak_end, DEFAULT_OFF_PEAK_END)
+        peak_end_hour, peak_end_minute, _ = _parse_hhmm(off_peak_start, DEFAULT_OFF_PEAK_START)
         local_now = now.astimezone()
         start = local_now.replace(
-            hour=_OVERNIGHT_WINDOW_START_HOUR,
-            minute=_OVERNIGHT_WINDOW_START_MINUTE,
+            hour=peak_start_hour,
+            minute=peak_start_minute,
             second=0,
             microsecond=0,
         )
         if local_now >= start:
             start += timedelta(days=1)
         end = start.replace(
-            hour=_OVERNIGHT_WINDOW_END_HOUR,
-            minute=_OVERNIGHT_WINDOW_END_MINUTE,
+            hour=peak_end_hour,
+            minute=peak_end_minute,
         )
         if end <= start:
             end += timedelta(days=1)

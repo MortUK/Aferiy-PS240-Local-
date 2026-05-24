@@ -58,14 +58,18 @@ Open the integration options to adjust:
 
 - Polling interval
 - Advanced energy estimate sensors
+- Off-peak tariff preset
+- Off-peak start and end times
 
 The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
+
+The off-peak window defaults to Octopus Go, 23:30 to 05:30. If your tariff uses different cheap-rate hours, set the start and end times manually in 24-hour `HH:MM` format. These times are used by the overnight target and morning shortfall calculations.
 
 ### Smart Overnight Charging Target
 
 The optional Recommended Overnight SOC sensor is aimed at users with cheap overnight electricity, such as Octopus Go or similar tariffs.
 
-It estimates the battery percentage needed at the end of the overnight charging window. The estimate uses the configured battery capacity, recent household energy use, expected solar generation, and the morning period before useful solar production begins. If Solcast forecast sensors are available, they can be used as the solar forecast source.
+It estimates the battery percentage needed at the end of the configured overnight charging window. The estimate uses the configured battery capacity, recent household energy use, expected solar generation, and the morning period before useful solar production begins. If Solcast forecast sensors are available, they can be used as the solar forecast source.
 
 Holiday or away mode can reduce the recommended target because normal household demand is expected to be lower. Morning shortfall shows the estimated energy gap between the end of the cheap-rate window and the point where solar should start helping. The target percentage is calculated from the energy needed to cover that gap, rounded to a practical SOC value and kept inside sensible battery limits.
 

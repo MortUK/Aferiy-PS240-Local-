@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 
 from .const import (
     CONF_ADVANCED_ENERGY_SENSORS,
+    CONF_OFF_PEAK_END,
+    CONF_OFF_PEAK_START,
+    CONF_TARIFF_PRESET,
     CONF_HOST,
     CONF_MANUFACTURER,
     CONF_MODEL,
@@ -21,13 +26,27 @@ from .const import (
     DEFAULT_MANUFACTURER,
     DEFAULT_MODEL,
     DEFAULT_NAME,
+    DEFAULT_OFF_PEAK_END,
+    DEFAULT_OFF_PEAK_START,
+    DEFAULT_TARIFF_PRESET,
     DEFAULT_PORT,
     DOMAIN,
     MIN_POLL_INTERVAL,
     POLL_INTERVAL,
+    TARIFF_PRESETS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+_TARIFF_PRESET_SELECTOR = selector.SelectSelector(
+    selector.SelectSelectorConfig(
+        options=[
+            selector.SelectOptionDict(value="octopus_go", label="Octopus Go (23:30-05:30)"),
+            selector.SelectOptionDict(value="custom", label="Custom/manual times"),
+        ],
+        mode=selector.SelectSelectorMode.DROPDOWN,
+    )
+)
 
 STEP_USER_SCHEMA = vol.Schema(
     {
@@ -84,9 +103,26 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
+            errors: dict[str, str] = {}
+            off_peak_start = user_input.get(CONF_OFF_PEAK_START, DEFAULT_OFF_PEAK_START).strip()
+            off_peak_end = user_input.get(CONF_OFF_PEAK_END, DEFAULT_OFF_PEAK_END).strip()
+            if not _TIME_RE.match(off_peak_start):
+                errors[CONF_OFF_PEAK_START] = "invalid_time"
+            if not _TIME_RE.match(off_peak_end):
+                errors[CONF_OFF_PEAK_END] = "invalid_time"
+            if errors:
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=self._options_schema(user_input),
+                    errors=errors,
+                )
+
             new_options = {
                 CONF_ADVANCED_ENERGY_SENSORS: user_input.get(CONF_ADVANCED_ENERGY_SENSORS, False),
                 CONF_POLL_INTERVAL: user_input.get(CONF_POLL_INTERVAL, POLL_INTERVAL),
+                CONF_TARIFF_PRESET: user_input.get(CONF_TARIFF_PRESET, DEFAULT_TARIFF_PRESET),
+                CONF_OFF_PEAK_START: off_peak_start,
+                CONF_OFF_PEAK_END: off_peak_end,
             }
             self.hass.config_entries.async_update_entry(
                 self._entry,
@@ -100,21 +136,37 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
             )
             return self.async_create_entry(title="", data=new_options)
 
+        return self.async_show_form(step_id="init", data_schema=self._options_schema())
+
+    def _options_schema(self, user_input: dict[str, Any] | None = None) -> vol.Schema:
         current = self._entry.data
         current_options = self._entry.options
-        schema = vol.Schema(
+        source = user_input or current_options
+        tariff_preset = source.get(CONF_TARIFF_PRESET, DEFAULT_TARIFF_PRESET)
+        preset_start, preset_end = TARIFF_PRESETS.get(
+            tariff_preset,
+            (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+        )
+        off_peak_start = source.get(CONF_OFF_PEAK_START, preset_start)
+        off_peak_end = source.get(CONF_OFF_PEAK_END, preset_end)
+        return vol.Schema(
             {
-                vol.Required(CONF_HOST, default=current.get(CONF_HOST, DEFAULT_HOST)): str,
-                vol.Required(CONF_PORT, default=current.get(CONF_PORT, DEFAULT_PORT)): vol.Coerce(int),
-                vol.Required(CONF_NAME, default=current.get(CONF_NAME, DEFAULT_NAME)): str,
+                vol.Required(CONF_HOST, default=source.get(CONF_HOST, current.get(CONF_HOST, DEFAULT_HOST))): str,
+                vol.Required(CONF_PORT, default=source.get(CONF_PORT, current.get(CONF_PORT, DEFAULT_PORT))): vol.Coerce(int),
+                vol.Required(CONF_NAME, default=source.get(CONF_NAME, current.get(CONF_NAME, DEFAULT_NAME))): str,
                 vol.Optional(
                     CONF_ADVANCED_ENERGY_SENSORS,
-                    default=current_options.get(CONF_ADVANCED_ENERGY_SENSORS, False),
+                    default=source.get(CONF_ADVANCED_ENERGY_SENSORS, False),
                 ): bool,
                 vol.Optional(
                     CONF_POLL_INTERVAL,
-                    default=current_options.get(CONF_POLL_INTERVAL, POLL_INTERVAL),
+                    default=source.get(CONF_POLL_INTERVAL, POLL_INTERVAL),
                 ): vol.All(vol.Coerce(int), vol.Range(min=MIN_POLL_INTERVAL, max=300)),
+                vol.Optional(
+                    CONF_TARIFF_PRESET,
+                    default=tariff_preset,
+                ): _TARIFF_PRESET_SELECTOR,
+                vol.Optional(CONF_OFF_PEAK_START, default=off_peak_start): str,
+                vol.Optional(CONF_OFF_PEAK_END, default=off_peak_end): str,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
