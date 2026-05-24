@@ -67,3 +67,18 @@ restore_original_self_consumption:
       required: false
       selector:
         text:
+
+restore_schedule_3_self_consumption:
+  name: Restore schedule-3 self-consumption
+  description: >
+    Diagnostic action that applies the upstream-style self-consumption write:
+    schedule mode 3, AI charge/discharge enabled, custom mode off, and the
+    manual time slot cleared. Use only for export/clipping tests; the normal
+    dashboard Self mode still uses the stable restore path.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Optional Home Assistant config entry ID. Leave blank for the active AECC Battery entry.
+      required: false
+      selector:
+        text:

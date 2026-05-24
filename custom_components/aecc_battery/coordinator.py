@@ -681,6 +681,32 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return success
 
+    async def async_restore_schedule_3_self_consumption(self) -> bool:
+        """Apply the upstream schedule-mode 3 self-consumption restore.
+
+        This is intentionally separate from the stable dashboard Self mode so
+        it can be tested against export/clipping behaviour without changing the
+        known-good overnight automation path.
+        """
+        payload = {
+            REG_EMS_ENABLE: "1",
+            REG_SCHEDULE_MODE: "3",
+            REG_AI_SMART_CHARGE: "1",
+            REG_AI_SMART_DISC: "1",
+            REG_CUSTOM_MODE: "0",
+            REG_CONTROL_TIME1: SLOT_DISABLED,
+        }
+
+        _LOGGER.info("SET schedule-3 self-consumption -> registers=%s", payload)
+
+        success = await self._logged_write(payload, "self_consumption(schedule_3)")
+        if success:
+            self._commanded_work_mode = MODE_SELF_CONSUMPTION
+            self._commanded_direction = "Idle"
+            self.commanded_operating_mode = "Self-Consumption"
+
+        return success
+
     async def async_set_work_mode(self, mode: str) -> bool:
         if mode == MODE_SELF_CONSUMPTION:
             return await self.async_restore_self_consumption()

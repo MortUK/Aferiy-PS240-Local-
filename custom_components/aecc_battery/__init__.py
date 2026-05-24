@@ -39,6 +39,7 @@ PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SELECT]
 SERVICE_SNAPSHOT_CONTROL_REGISTERS = "snapshot_control_registers"
 SERVICE_SNAPSHOT_POWER_FLOW = "snapshot_power_flow"
 SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION = "restore_original_self_consumption"
+SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION = "restore_schedule_3_self_consumption"
 MAX_SNAPSHOT_REGISTER_COUNT = 250
 
 POWER_FLOW_ENTITY_IDS = (
@@ -171,6 +172,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_CONTROL_REGISTERS)
         and hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_POWER_FLOW)
         and hass.services.has_service(DOMAIN, SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION)
+        and hass.services.has_service(DOMAIN, SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION)
     ):
         return
 
@@ -370,6 +372,51 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 },
             )
 
+    async def async_restore_schedule_3_self_consumption(call: ServiceCall) -> None:
+        """Run the upstream schedule-mode 3 self-consumption register write."""
+        requested_entry_id = call.data.get("entry_id")
+
+        coordinators: list[tuple[str, AeccBatteryCoordinator]] = []
+        for entry_id, value in (hass.data.get(DOMAIN) or {}).items():
+            if requested_entry_id and entry_id != requested_entry_id:
+                continue
+            if isinstance(value, AeccBatteryCoordinator):
+                coordinators.append((entry_id, value))
+
+        if not coordinators:
+            _LOGGER.warning(
+                "Schedule-3 self-consumption requested, but no matching AECC coordinator was found"
+            )
+            return
+
+        for entry_id, coordinator in coordinators:
+            success = await coordinator.async_restore_schedule_3_self_consumption()
+            state = "Applied" if success else "Failed"
+            hass.states.async_set(
+                "sensor."
+                f"{slugify(coordinator.device_name)}_schedule_3_self_consumption_result",
+                state,
+                {
+                    "friendly_name": f"{coordinator.device_name} Schedule 3 Self-Consumption Result",
+                    "icon": "mdi:battery-sync",
+                    "entry_id": entry_id,
+                    "applied_at": datetime.now(UTC).isoformat(),
+                    "success": success,
+                    "registers": {
+                        "3000": "1",
+                        "3003": "0,00:00,00:00,0,0,0,0,0,0,100,10",
+                        "3020": "3",
+                        "3021": "1",
+                        "3022": "1",
+                        "3030": "0",
+                    },
+                    "note": (
+                        "Upstream-style diagnostic self-consumption write; "
+                        "uses schedule mode 3 and clears the manual slot."
+                    ),
+                },
+            )
+
     if not hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_CONTROL_REGISTERS):
         hass.services.async_register(
             DOMAIN,
@@ -389,6 +436,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
             DOMAIN,
             SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION,
             async_restore_original_self_consumption,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION,
+            async_restore_schedule_3_self_consumption,
         )
 
 def _diff_registers(
