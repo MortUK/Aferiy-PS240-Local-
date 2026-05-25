@@ -61,13 +61,13 @@ Open the integration options to adjust:
 - Advanced energy estimate sensors
 - Off-peak tariff preset
 - Off-peak start and end times
-- External dependency confirmations for advanced estimates
+- External helper confirmations for advanced estimates and automations
 
 The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
 
 The off-peak window defaults to Octopus Intelligent Go, 23:30 to 05:30. Named presets are available for Snug Octopus, Octopus Go, Octopus Intelligent Go, E.ON Next Drive, British Gas Electric Driver, and British Gas Economy 7. If your tariff uses different cheap-rate hours, choose Custom and set the start and end times manually in 24-hour `HH:MM` format. These times are used by the overnight target and Pre-Sunrise Need calculations.
 
-The external dependency checkboxes are reminders for installers. They do not install or validate those integrations, but they make it clear that the smart estimates work best with Solcast PV Forecast, a whole-home grid meter such as Shelly Pro 3EM, Home Assistant Recorder history, optional Octopus Energy tariff sensors, and home occupancy via `zone.home`.
+The external helper checkboxes are reminders for installers. They do not install or validate those integrations. Smart estimates work best with Solcast PV Forecast, a whole-home grid meter such as Shelly Pro 3EM, Home Assistant Recorder history, and home occupancy via `zone.home`. Octopus Energy sensors are optional and only needed for automations or diagnostics that react to live off-peak or free-electricity session entities.
 
 ### Smart Overnight Charging Target
 

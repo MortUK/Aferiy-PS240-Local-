@@ -58,14 +58,14 @@ Useful attributes include `recommendation_reason`, `pre_sunrise_need_kwh`, `dyna
 
 For best results, enable the advanced estimate sensors, configure the battery capacity correctly, keep Home Assistant recorder history available, and provide Solcast forecast sensors. Without enough data the sensor may use conservative defaults or show that it cannot calculate a reliable target.
 
-## External Dependencies
+## External Helpers
 
-The options page includes confirmation checkboxes for the common external helpers used by the advanced estimates:
+The options page includes confirmation checkboxes for common external helpers:
 
 - Solcast PV Forecast, for timed solar forecast data
 - Whole-home grid meter, such as Shelly Pro 3EM, for trusted import/export comparison
 - Home Assistant Recorder history, for time-of-day demand profiles
-- Octopus Energy tariff sensors, for off-peak and free-electricity automations
 - Home occupancy through `zone.home`, for empty-house demand handling
+- Octopus Energy tariff sensors, only for automations or diagnostics that react to live off-peak/free-electricity entities
 
-These checkboxes are installer reminders. They do not install the integrations or block setup.
+These checkboxes are installer reminders. They do not install integrations or block setup.

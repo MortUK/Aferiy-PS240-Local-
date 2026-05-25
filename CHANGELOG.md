@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.20
+
+- Clarified that Octopus Energy sensors are optional helpers for automations and diagnostics, not required by the core local battery integration.
+- Renamed installer-facing dependency wording to external helper wording.
+
 ## 1.4.19
 
 - Added off-peak tariff presets for Snug Octopus, Octopus Go, Octopus Intelligent Go, E.ON Next Drive, British Gas Electric Driver, and British Gas Economy 7.
