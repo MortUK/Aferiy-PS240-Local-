@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.22
+
+- Simplified the installer helper checklist again to Solcast installed and Home Occupancy enabled.
+- Removed Shelly Smart Meter from the checklist because AECC grid readings are used for control and estimates; Shelly comparison remains diagnostic only.
+
 ## 1.4.21
 
 - Simplified the installer helper checklist to Solcast installed, Shelly Smart Meter installed, and Home Occupancy enabled.

@@ -67,7 +67,7 @@ The advanced estimate sensors are disabled by default because they can depend on
 
 The off-peak window defaults to Octopus Intelligent Go, 23:30 to 05:30. Named presets are available for Snug Octopus, Octopus Go, Octopus Intelligent Go, E.ON Next Drive, British Gas Electric Driver, and British Gas Economy 7. If your tariff uses different cheap-rate hours, choose Custom and set the start and end times manually in 24-hour `HH:MM` format. These times are used by the overnight target and Pre-Sunrise Need calculations.
 
-The external helper checkboxes are reminders for installers. They do not install or validate integrations. Smart estimates look for standard Solcast forecast files and sensors, use `zone.home` for home occupancy, and can compare AECC grid readings with common Shelly helper entities when present. Battery control and the overnight target can still use the configured tariff window and AECC grid reading without a Shelly or Octopus integration.
+The external helper checkboxes are reminders for installers. They do not install or validate integrations. Smart estimates look for standard Solcast forecast files and sensors and use `zone.home` for home occupancy. Battery control and the overnight target use the configured tariff window and AECC grid reading; Shelly comparison remains diagnostic only.
 
 ### Smart Overnight Charging Target
 

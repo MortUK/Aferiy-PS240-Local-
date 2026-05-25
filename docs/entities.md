@@ -64,6 +64,5 @@ The options page includes confirmation checkboxes for common external helpers:
 
 - Solcast PV Forecast, for timed solar forecast data
 - Home occupancy through `zone.home`, for empty-house demand handling
-- Shelly Smart Meter, for trusted import/export comparison when common Shelly helper entities are present
 
 These checkboxes are installer reminders. They do not install integrations or block setup.

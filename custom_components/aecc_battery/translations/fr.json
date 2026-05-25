@@ -39,17 +39,15 @@
           "off_peak_start": "Début des heures creuses",
           "off_peak_end": "Fin des heures creuses",
           "dependency_solcast_confirmed": "Solcast installed",
-          "dependency_grid_meter_confirmed": "Shelly Smart Meter installed",
           "dependency_home_occupancy_confirmed": "Home Occupancy enabled"
         },
         "data_description": {
-          "advanced_energy_sensors": "Ajoute des capteurs d'estimation optionnels pouvant utiliser des entités externes de réseau, prévision solaire et demande du foyer.",
+          "advanced_energy_sensors": "Ajoute des capteurs d'estimation optionnels pouvant utiliser la prévision solaire, le tarif, l'occupation et la demande du foyer.",
           "poll_interval": "Fréquence d'interrogation locale de la batterie, en secondes.",
           "tariff_preset": "Defaults to Octopus Intelligent Go. Named presets store their listed times automatically; choose custom to edit the times manually.",
           "off_peak_start": "Start of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
           "off_peak_end": "End of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
           "dependency_solcast_confirmed": "Used for timed solar forecasts and solar-aware estimates. The integration currently looks for standard Solcast forecast files and sensors.",
-          "dependency_grid_meter_confirmed": "Installer reminder for trusted import/export comparison. Battery control and overnight estimates can still use the AECC grid reading.",
           "dependency_home_occupancy_confirmed": "Uses Home Assistant's zone.home occupancy count so empty-house periods do not train the normal demand profile."
         }
       }
