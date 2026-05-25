@@ -58,6 +58,8 @@ POWER_FLOW_ENTITY_IDS = (
     "sensor.aecc_battery_estimated_house_demand",
     "sensor.aecc_battery_runtime_at_current_house_demand",
     "sensor.aecc_battery_recommended_overnight_soc",
+    "sensor.aecc_battery_grid_meter_agreement",
+    "sensor.aecc_battery_charging_reason",
     "select.aecc_battery_operating_mode",
     "select.aecc_battery_battery_capacity_preset",
     "number.aecc_battery_charge_power_target",
@@ -106,6 +108,16 @@ POWER_FLOW_ATTRIBUTE_KEYS = (
     "time_mode",
     "max_charge_power",
     "max_feed_power",
+    "aecc_grid_meter_power_w",
+    "shelly_grid_power_w",
+    "difference_w",
+    "absolute_difference_w",
+    "shelly_source",
+    "free_octopus_session",
+    "off_peak",
+    "overnight_smart_charge",
+    "operating_mode",
+    "charge_limit",
 )
 
 

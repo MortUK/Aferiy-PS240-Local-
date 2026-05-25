@@ -108,9 +108,7 @@ BRAND_PROFILES: dict[str, dict[str, float | int]] = {
     },
 }
 
-BRAND_PROFILES["Richard Owen"] = BRAND_PROFILES["AFERIY"]
-
-DEFAULT_BRAND_PROFILE: dict[str, float | int] = BRAND_PROFILES["Richard Owen"]
+DEFAULT_BRAND_PROFILE: dict[str, float | int] = BRAND_PROFILES["AFERIY"]
 
 
 # ─── Control register addresses ───────────────────────────────────────────────

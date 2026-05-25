@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.17
+
+- Replaced the personal away-mode check with household occupancy from `zone.home`, so demand estimates work for any Home Assistant household rather than one named person.
+- Skipped historic demand profile days where the home was empty for most of the forecast window.
+- Removed the personal default brand profile alias and kept the public default on the generic AFERIY profile.
+- Added Grid Meter Agreement and Charging Reason diagnostic sensors.
+- Included the new diagnostic fields in power-flow snapshots.
+- Always create the Firmware Version diagnostic sensor, even when the battery has not exposed a value yet.
+
 ## 1.4.16
 
 - Added configurable off-peak tariff start and end times, defaulting to Octopus Go 23:30-05:30.

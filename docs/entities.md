@@ -21,7 +21,9 @@ Diagnostic entities are intended for troubleshooting rather than dashboards:
 - Last Successful Update
 - Consecutive Poll Failures
 - Last Command Result
-- Firmware Version, when exposed by the battery
+- Firmware Version
+- Grid Meter Agreement
+- Charging Reason
 - Selected raw or derived diagnostic readings
 
 ## Advanced Energy Estimate Sensors
@@ -46,7 +48,7 @@ The calculation can use:
 - Recent household energy use from Home Assistant history
 - Solar forecast data, ideally from Solcast
 - The expected morning period before solar generation is useful
-- Holiday or away mode, where household demand may be lower than normal
+- Home occupancy from `zone.home`, so empty-house days can be treated separately from normal household demand
 
 Morning shortfall is the estimated energy needed after the cheap-rate window ends and before solar should start covering the house. The recommended target percentage is calculated from that shortfall, the battery capacity, recent use, and the solar forecast. It is then kept within practical SOC limits.
 

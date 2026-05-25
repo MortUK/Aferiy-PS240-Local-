@@ -19,6 +19,7 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Home Assistant diagnostics export support
 - Custom AFERIY PS240 icon
 - Connection health and last-command result sensors
+- Grid meter agreement and charging reason diagnostics
 
 ## Install With HACS
 
@@ -71,7 +72,7 @@ The optional Recommended Overnight SOC sensor is aimed at users with cheap overn
 
 It estimates the battery percentage needed at the end of the configured overnight charging window. The estimate uses the configured battery capacity, recent household energy use, expected solar generation, and the morning period before useful solar production begins. If Solcast forecast sensors are available, they can be used as the solar forecast source.
 
-Holiday or away mode can reduce the recommended target because normal household demand is expected to be lower. Morning shortfall shows the estimated energy gap between the end of the cheap-rate window and the point where solar should start helping. The target percentage is calculated from the energy needed to cover that gap, rounded to a practical SOC value and kept inside sensible battery limits.
+Holiday or away mode can reduce the recommended target because normal household demand is expected to be lower. For public installs this is based on Home Assistant's `zone.home` occupancy count, not a hardcoded person entity, so it works for households with multiple residents. Morning shortfall shows the estimated energy gap between the end of the cheap-rate window and the point where solar should start helping. The target percentage is calculated from the energy needed to cover that gap, rounded to a practical SOC value and kept inside sensible battery limits.
 
 For this entity to work well, Home Assistant needs suitable energy history and, ideally, Solcast solar forecast sensors. Without those inputs, the estimate may fall back to conservative defaults or report that there is not enough data.
 

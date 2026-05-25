@@ -42,7 +42,7 @@ snapshot_control_registers:
 snapshot_power_flow:
   name: Snapshot power flow
   description: >
-    Captures the current AECC Battery, Shelly grid, and AFERIY cloud helper
+    Captures the current AECC Battery, grid agreement, and AFERIY cloud helper
     entity states into one diagnostic sensor for troubleshooting.
   fields:
     label:

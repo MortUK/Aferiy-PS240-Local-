@@ -119,10 +119,21 @@ _SOLCAST_POWER_NOW_ENTITY = "sensor.solcast_pv_forecast_power_now"
 _SOLCAST_TOMORROW_ENTITY = "sensor.solcast_pv_forecast_forecast_tomorrow"
 _SHELLY_IMPORT_ENTITY = "sensor.shelly_grid_import_power"
 _SHELLY_EXPORT_ENTITY = "sensor.shelly_grid_export_power"
+_SHELLY_GRID_POWER_CANDIDATES = (
+    "sensor.shellypro3em_841fe8916604_power",
+    "sensor.shellypro3em_841fe8916604_phase_a_power",
+)
 _GRID_METER_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_grid_meter_power"
 _HOUSE_DEMAND_DAILY_ENTITY = "sensor.house_demand_daily"
 _AC_CHARGING_DAILY_ENTITY = "sensor.aferiy_ac_charging_daily"
-_AWAY_MODE_PERSON_ENTITY = "person.richard_owen"
+_HOUSE_OCCUPANCY_ENTITY = "zone.home"
+_OCTOPUS_FREE_SESSION_ENTITY = (
+    "binary_sensor.octopus_energy_a_5c18533f_octoplus_free_electricity_session"
+)
+_OCTOPUS_OFF_PEAK_ENTITY = (
+    "binary_sensor.octopus_energy_electricity_19k0195462_1900042087502_off_peak"
+)
+_OVERNIGHT_SMART_CHARGE_ENTITY = "input_boolean.overnight_smart_charge"
 _FORECAST_PERIOD = timedelta(minutes=30)
 _RUNTIME_DEMAND_HISTORY_WINDOW = timedelta(hours=3)
 _RUNTIME_DEMAND_MIN_HISTORY = timedelta(minutes=15)
@@ -179,6 +190,34 @@ def _state_float(
     if state is None or state.state in ("unknown", "unavailable"):
         return default
     return _as_float(state.state, default)
+
+
+def _signed_shelly_grid_power_w(hass: HomeAssistant) -> tuple[float | None, str | None]:
+    for entity_id in _SHELLY_GRID_POWER_CANDIDATES:
+        value = _state_float(hass, entity_id)
+        if value is not None:
+            return value, entity_id
+
+    import_w = _state_float(hass, _SHELLY_IMPORT_ENTITY)
+    export_w = _state_float(hass, _SHELLY_EXPORT_ENTITY)
+    if import_w is None and export_w is None:
+        return None, None
+    return (import_w or 0.0) - (export_w or 0.0), "shelly_import_export_helpers"
+
+
+def _house_empty_from_state(state: str | None) -> tuple[bool | None, int | None]:
+    if state is None or state in ("unknown", "unavailable"):
+        return None, None
+
+    occupants = _as_float(state)
+    if occupants is not None:
+        return occupants <= 0, int(max(0, occupants))
+
+    if state == "home":
+        return False, 1
+    if state in ("not_home", "away"):
+        return True, 0
+    return None, None
 
 
 def _estimate_house_demand_w(
@@ -250,14 +289,15 @@ async def async_setup_entry(
     entities.append(AeccLastSuccessfulUpdateSensor(coordinator, config_entry))
     entities.append(AeccConsecutiveFailuresSensor(coordinator, config_entry))
     entities.append(AeccLastCommandResultSensor(coordinator, config_entry))
+    entities.append(AeccGridMeterAgreementSensor(coordinator, config_entry))
+    entities.append(AeccChargingReasonSensor(coordinator, config_entry))
 
     if config_entry.options.get(CONF_ADVANCED_ENERGY_SENSORS, False):
         entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
         entities.append(AeccRuntimeAtCurrentHouseDemandSensor(coordinator, config_entry))
         entities.append(AeccRecommendedOvernightSocSensor(coordinator, config_entry))
 
-    if coordinator.firmware_version is not None:
-        entities.append(AeccFirmwareSensor(coordinator, config_entry))
+    entities.append(AeccFirmwareSensor(coordinator, config_entry))
 
     async_add_entities(entities)
 
@@ -448,7 +488,7 @@ class AeccEnergySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreEntity,
 
 
 class AeccGridExportSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
-    """Grid export power derived from grid_power. Export = positive grid values only."""
+    """Grid export power derived from grid_power. Export = negative grid values only."""
 
     _attr_has_entity_name = True
     _attr_name = "Grid Export Power"
@@ -595,6 +635,133 @@ class AeccEstimatedHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordinator], 
         value, attrs = _estimate_house_demand_w(self.hass, self.coordinator)
         self._last_attributes = attrs
         return value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self._last_attributes)
+
+
+class AeccGridMeterAgreementSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    """Diagnostic difference between AECC and Shelly grid readings."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Grid Meter Agreement"
+    _attr_icon = "mdi:scale-balance"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_grid_meter_agreement"
+        self._last_attributes: dict[str, Any] = {}
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> float | None:
+        aecc_grid_w = _as_float(self.coordinator.get_value("grid_power"))
+        shelly_grid_w, shelly_source = _signed_shelly_grid_power_w(self.hass)
+
+        if aecc_grid_w is None or shelly_grid_w is None:
+            self._last_attributes = {
+                "status": "missing_data",
+                "aecc_grid_meter_power_w": round(aecc_grid_w, 1) if aecc_grid_w is not None else None,
+                "shelly_grid_power_w": round(shelly_grid_w, 1) if shelly_grid_w is not None else None,
+                "shelly_source": shelly_source,
+                "note": "Positive is import; negative is export.",
+            }
+            return None
+
+        difference_w = aecc_grid_w - shelly_grid_w
+        abs_difference_w = abs(difference_w)
+        if abs_difference_w <= 75:
+            status = "matching"
+        elif abs_difference_w <= 250:
+            status = "minor_drift"
+        else:
+            status = "large_drift"
+
+        self._last_attributes = {
+            "status": status,
+            "aecc_grid_meter_power_w": round(aecc_grid_w, 1),
+            "shelly_grid_power_w": round(shelly_grid_w, 1),
+            "difference_w": round(difference_w, 1),
+            "absolute_difference_w": round(abs_difference_w, 1),
+            "shelly_source": shelly_source,
+            "matching_threshold_w": 75,
+            "minor_drift_threshold_w": 250,
+            "note": "Positive is import; negative is export.",
+        }
+        return round(difference_w, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self._last_attributes)
+
+
+class AeccChargingReasonSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    """Human-readable reason for the current battery charge behavior."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Charging Reason"
+    _attr_icon = "mdi:message-processing-outline"
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_charging_reason"
+        self._last_attributes: dict[str, Any] = {}
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> str:
+        mode = getattr(self.coordinator, "commanded_operating_mode", None)
+        if not mode:
+            mode = self.hass.states.get("select.aecc_battery_operating_mode")
+            mode = mode.state if mode is not None else None
+
+        free_session = self.hass.states.is_state(_OCTOPUS_FREE_SESSION_ENTITY, "on")
+        off_peak = self.hass.states.is_state(_OCTOPUS_OFF_PEAK_ENTITY, "on")
+        overnight_enabled = self.hass.states.is_state(_OVERNIGHT_SMART_CHARGE_ENTITY, "on")
+        battery_soc = _state_float(self.hass, "sensor.aecc_battery_battery_soc")
+        charge_limit = _state_float(self.hass, "number.aecc_battery_charge_limit")
+
+        if free_session:
+            reason = "Free Octopus session"
+        elif off_peak and not overnight_enabled:
+            reason = "Smart charge disabled"
+        elif off_peak and overnight_enabled and battery_soc is not None and charge_limit is not None:
+            reason = "Off-peak target charge" if battery_soc <= charge_limit else "Already above target"
+        elif off_peak and overnight_enabled:
+            reason = "Off-peak target pending"
+        elif mode == "Charge":
+            reason = "Manual charge"
+        elif mode == "Discharge":
+            reason = "Manual discharge"
+        elif mode in ("Self-Gen/Zero Export", "Self-Consumption"):
+            reason = "Self-consumption"
+        elif mode == "Idle":
+            reason = "Idle"
+        else:
+            reason = "Unknown"
+
+        self._last_attributes = {
+            "operating_mode": mode,
+            "free_octopus_session": free_session,
+            "off_peak": off_peak,
+            "overnight_smart_charge": overnight_enabled,
+            "battery_soc": round(battery_soc, 1) if battery_soc is not None else None,
+            "charge_limit": round(charge_limit, 1) if charge_limit is not None else None,
+        }
+        return reason
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1497,6 +1664,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
 
             recorder = get_instance(self.hass)
             daily_results: list[dict[str, Any]] = []
+            skipped_away_days: list[dict[str, Any]] = []
             local_now = now.astimezone()
             self._recorder_profile_start = now
 
@@ -1505,6 +1673,22 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                 window_end_local = window_start_local + _RUNTIME_PROFILE_HORIZON
                 start = window_start_local.astimezone(UTC)
                 end = window_end_local.astimezone(UTC)
+                away_ratio, occupancy_entity_id = await self._async_away_ratio_for_window(
+                    recorder,
+                    state_changes_during_period,
+                    start,
+                    end,
+                )
+                if away_ratio is not None and away_ratio >= 0.5:
+                    skipped_away_days.append(
+                        {
+                            "days_ago": days_ago,
+                            "away_ratio": round(away_ratio, 3),
+                            "occupancy_entity": occupancy_entity_id,
+                            "reason": "house_empty_for_most_of_window",
+                        }
+                    )
+                    continue
 
                 history = await recorder.async_add_executor_job(
                     state_changes_during_period,
@@ -1569,6 +1753,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
                     "recorder_history_valid_days": 0,
                     "recorder_history_rejected_days": len(rejected_daily_averages),
+                    "recorder_history_skipped_away_days": skipped_away_days,
                     "recorder_history_rejected_daily_averages": rejected_daily_averages,
                     "recorder_history_last_refresh": refreshed_at.isoformat(),
                     "recorder_history_profile_start": now.isoformat(),
@@ -1588,6 +1773,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                     "recorder_history_interval_minutes": round(_RUNTIME_PROFILE_INTERVAL.total_seconds() / 60, 1),
                     "recorder_history_valid_days": len(daily_averages),
                     "recorder_history_rejected_days": len(rejected_daily_averages),
+                    "recorder_history_skipped_away_days": skipped_away_days,
                     "recorder_history_demand_w": round(average_w, 1),
                     "recorder_history_energy_kwh": round(average_window_energy_kwh, 3),
                     "recorder_history_profile_buckets": len(demand_profile),
@@ -1606,6 +1792,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                     "recorder_history_source_entity": entity_id,
                     "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
+                    "recorder_history_skipped_away_days": [],
                     "recorder_history_reason": str(exc),
                 }
         finally:
@@ -1683,6 +1870,73 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
             f"{self._config_entry.entry_id}_estimated_house_demand",
         )
         return entity_id or _ESTIMATED_HOUSE_DEMAND_ENTITY_FALLBACK
+
+    async def _async_away_ratio_for_window(
+        self,
+        recorder: Any,
+        state_changes_during_period: Any,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[float | None, str]:
+        try:
+            history = await recorder.async_add_executor_job(
+                state_changes_during_period,
+                self.hass,
+                start,
+                end,
+                _HOUSE_OCCUPANCY_ENTITY,
+                True,
+                False,
+                None,
+                True,
+            )
+        except Exception as exc:
+            _LOGGER.debug(
+                "Could not read home occupancy history for %s: %s",
+                _HOUSE_OCCUPANCY_ENTITY,
+                exc,
+            )
+            return None, _HOUSE_OCCUPANCY_ENTITY
+        return (
+            self._away_ratio_from_history(history.get(_HOUSE_OCCUPANCY_ENTITY, []), start, end),
+            _HOUSE_OCCUPANCY_ENTITY,
+        )
+
+    @staticmethod
+    def _away_ratio_from_history(states: list[Any], start: datetime, end: datetime) -> float | None:
+        samples: list[tuple[datetime, str]] = []
+        for state in states:
+            if state.state in ("unknown", "unavailable"):
+                continue
+            sample_time = state.last_updated.astimezone(UTC)
+            if sample_time < start:
+                sample_time = start
+            if sample_time > end:
+                continue
+            samples.append((sample_time, state.state))
+
+        if not samples:
+            return None
+
+        samples.sort(key=lambda item: item[0])
+        if samples[0][0] > start:
+            samples.insert(0, (start, samples[0][1]))
+        if samples[-1][0] < end:
+            samples.append((end, samples[-1][1]))
+
+        total_seconds = max(0.0, (end - start).total_seconds())
+        if total_seconds <= 0:
+            return None
+
+        away_seconds = 0.0
+        for index in range(len(samples) - 1):
+            current_time, current_state = samples[index]
+            next_time, _next_state = samples[index + 1]
+            house_empty, _occupants = _house_empty_from_state(current_state)
+            if house_empty:
+                away_seconds += max(0.0, (next_time - current_time).total_seconds())
+
+        return away_seconds / total_seconds
 
     async def _async_raw_power_flow_history(
         self,
@@ -2360,7 +2614,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor):
             "fallback_daily_demand_kwh": round(fallback_kwh, 3),
             "fallback_daily_demand_source": source,
             "away_mode": away_mode,
-            "away_mode_entity": _AWAY_MODE_PERSON_ENTITY,
+            "away_mode_entity": _HOUSE_OCCUPANCY_ENTITY,
+            "away_mode_basis": "home_zone_empty",
             "daily_demand_floor_kwh": demand_floor_kwh,
             "house_demand_daily_kwh": round(house_daily_kwh, 3) if house_daily_kwh is not None else None,
             "ac_charging_daily_kwh": round(ac_daily_kwh, 3),
@@ -2372,10 +2627,11 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor):
         }
 
     def _away_mode_active(self) -> bool:
-        state = self.hass.states.get(_AWAY_MODE_PERSON_ENTITY)
-        if state is None or state.state in ("unknown", "unavailable"):
+        state = self.hass.states.get(_HOUSE_OCCUPANCY_ENTITY)
+        if state is None:
             return False
-        return state.state != "home"
+        house_empty, _occupants = _house_empty_from_state(state.state)
+        return bool(house_empty)
 
     def _project_peak_window(
         self,
@@ -2630,7 +2886,7 @@ class AeccFirmwareSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity
     _attr_has_entity_name = True
     _attr_name = "Firmware Version"
     _attr_icon = "mdi:chip"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator)
