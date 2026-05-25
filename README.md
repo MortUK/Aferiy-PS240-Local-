@@ -72,7 +72,9 @@ The optional Recommended Overnight SOC sensor is aimed at users with cheap overn
 
 It estimates the battery percentage needed at the end of the configured overnight charging window. The estimate uses the configured battery capacity, recent household energy use, expected solar generation, and the morning period before useful solar production begins. If Solcast forecast sensors are available, they can be used as the solar forecast source.
 
-Holiday or away mode can reduce the recommended target because normal household demand is expected to be lower. For public installs this is based on Home Assistant's `zone.home` occupancy count, not a hardcoded person entity, so it works for households with multiple residents. Morning shortfall shows the estimated energy gap between the end of the cheap-rate window and the point where solar should start helping. The target percentage is calculated from the energy needed to cover that gap, rounded to a practical SOC value and kept inside sensible battery limits.
+Empty-house mode can reduce the recommended target because normal household demand is expected to be lower. For public installs this is based on Home Assistant's `zone.home` occupancy count, not a hardcoded person entity, so it works for households with multiple residents. Pre-Sunrise Need shows the estimated energy gap between the end of the cheap-rate window and the point where solar should start helping. The target percentage is calculated from the energy needed to cover that gap, the wider peak-rate window, battery efficiency losses, and a dynamic safety buffer.
+
+The dynamic buffer grows when timed Solcast data is unavailable, there is limited house-demand history, the forecast is low, or the pre-sunrise period needs more cover. The sensor also exposes a plain-English recommendation reason and flags unusually large target changes for review without blocking the recommendation.
 
 For this entity to work well, Home Assistant needs suitable energy history and, ideally, Solcast solar forecast sensors. Without those inputs, the estimate may fall back to conservative defaults or report that there is not enough data.
 

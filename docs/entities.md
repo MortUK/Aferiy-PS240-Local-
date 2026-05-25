@@ -47,9 +47,13 @@ The calculation can use:
 - The configured usable battery capacity
 - Recent household energy use from Home Assistant history
 - Solar forecast data, ideally from Solcast
-- The expected morning period before solar generation is useful
+- The expected Pre-Sunrise Need before solar generation is useful
 - Home occupancy from `zone.home`, so empty-house days can be treated separately from normal household demand
+- Battery discharge and grid charge efficiency allowances
+- A dynamic buffer that increases when forecast or demand history is less certain
 
-Morning shortfall is the estimated energy needed after the cheap-rate window ends and before solar should start covering the house. The recommended target percentage is calculated from that shortfall, the battery capacity, recent use, and the solar forecast. It is then kept within practical SOC limits.
+Pre-Sunrise Need is the estimated energy needed after the cheap-rate window ends and before solar should start covering the house. The recommended target percentage is calculated from that need, the wider peak-rate window, the battery capacity, recent use, expected solar, efficiency losses, and a dynamic buffer. It is then kept within practical SOC limits.
+
+Useful attributes include `recommendation_reason`, `pre_sunrise_need_kwh`, `dynamic_buffer_soc`, `battery_loss_allowance_kwh`, `estimated_grid_charge_energy_to_target_kwh`, and `target_jump_guard`.
 
 For best results, enable the advanced estimate sensors, configure the battery capacity correctly, keep Home Assistant recorder history available, and provide Solcast forecast sensors. Without enough data the sensor may use conservative defaults or show that it cannot calculate a reliable target.

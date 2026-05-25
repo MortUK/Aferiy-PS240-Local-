@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.18
+
+- Improved the Recommended Overnight SOC calculation with a dynamic buffer that grows when demand history, timed solar forecast data, or pre-sunrise coverage is weaker.
+- Split occupied-house and empty-house demand floors, using `zone.home` occupancy while keeping the previous away-mode attributes as compatibility aliases.
+- Added specific Pre-Sunrise Need attributes for the period after cheap-rate charging ends and before useful solar starts.
+- Added battery discharge and grid charge efficiency allowances so the target better reflects real usable energy.
+- Added a plain-English recommendation reason attribute for dashboard cards.
+- Added a warning-only target jump guard for unusually large target changes.
+
 ## 1.4.17
 
 - Replaced the personal away-mode check with household occupancy from `zone.home`, so demand estimates work for any Home Assistant household rather than one named person.
