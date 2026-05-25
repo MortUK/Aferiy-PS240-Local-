@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.23
+
+- Added Recommended Overnight SOC target breakdown attributes for dashboards.
+- Added Solcast/data-history freshness checks and a safer stale-data minimum target.
+- Added forecast confidence adjustments for uncertain or very low solar forecasts.
+- Changed Pre-Sunrise Need to run until sustained forecast solar should cover house demand when timed Solcast data is available.
+- Made the options helper checklist labels render directly in the form if Home Assistant translation caching falls back to raw keys.
+
 ## 1.4.22
 
 - Simplified the installer helper checklist again to Solcast installed and Home Occupancy enabled.

@@ -71,15 +71,17 @@ The external helper checkboxes are reminders for installers. They do not install
 
 ### Smart Overnight Charging Target
 
-The optional Recommended Overnight SOC sensor is aimed at users with cheap overnight electricity, such as Octopus Go or similar tariffs.
+The optional Recommended Overnight SOC sensor helps users with cheap overnight electricity charge only what they are likely to need before the next off-peak window, using tomorrow's solar forecast to reduce unnecessary grid charging.
 
-It estimates the battery percentage needed at the end of the configured overnight charging window. The estimate uses the configured battery capacity, recent household energy use, expected solar generation, and the morning period before useful solar production begins. If Solcast forecast sensors are available, they can be used as the solar forecast source.
-
-Empty-house mode can reduce the recommended target because normal household demand is expected to be lower. For public installs this is based on Home Assistant's `zone.home` occupancy count, not a hardcoded person entity, so it works for households with multiple residents. Pre-Sunrise Need shows the estimated energy gap between the end of the cheap-rate window and the point where solar should start helping. The target percentage is calculated from the energy needed to cover that gap, the wider peak-rate window, battery efficiency losses, and a dynamic safety buffer.
-
-The dynamic buffer grows when timed Solcast data is unavailable, there is limited house-demand history, the forecast is low, or the pre-sunrise period needs more cover. The sensor also exposes a plain-English recommendation reason and flags unusually large target changes for review without blocking the recommendation.
-
-For this entity to work well, Home Assistant needs suitable energy history and, ideally, Solcast solar forecast sensors. Without those inputs, the estimate may fall back to conservative defaults or report that there is not enough data.
+- Uses the configured battery capacity and reserve/minimum SOC.
+- Learns a time-of-day house demand profile from recent Home Assistant history.
+- Ignores mostly empty-house days using `zone.home` occupancy.
+- Subtracts AFERIY AC charging from daily fallback demand.
+- Uses Solcast, preferably timed forecast data, instead of previous clipped solar output.
+- Estimates Pre-Sunrise Need from the off-peak end until sustained forecast solar should cover house demand.
+- Adds battery loss, grid charge loss, a dynamic buffer, and a forecast confidence adjustment.
+- Applies a safer minimum SOC if Solcast or demand history is stale or missing.
+- Exposes a plain-English target breakdown so dashboards can show why the target was chosen.
 
 ### Solar Clipping And Export
 

@@ -41,6 +41,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+_DEPENDENCY_SOLCAST_FIELD = "1. Solcast installed"
+_DEPENDENCY_HOME_OCCUPANCY_FIELD = "2. Home Occupancy enabled"
 _TARIFF_PRESET_SELECTOR = selector.SelectSelector(
     selector.SelectSelectorConfig(
         options=[
@@ -135,8 +137,14 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
                 CONF_TARIFF_PRESET: tariff_preset,
                 CONF_OFF_PEAK_START: off_peak_start,
                 CONF_OFF_PEAK_END: off_peak_end,
-                CONF_DEPENDENCY_SOLCAST: user_input.get(CONF_DEPENDENCY_SOLCAST, False),
-                CONF_DEPENDENCY_HOME_OCCUPANCY: user_input.get(CONF_DEPENDENCY_HOME_OCCUPANCY, False),
+                CONF_DEPENDENCY_SOLCAST: user_input.get(
+                    _DEPENDENCY_SOLCAST_FIELD,
+                    user_input.get(CONF_DEPENDENCY_SOLCAST, False),
+                ),
+                CONF_DEPENDENCY_HOME_OCCUPANCY: user_input.get(
+                    _DEPENDENCY_HOME_OCCUPANCY_FIELD,
+                    user_input.get(CONF_DEPENDENCY_HOME_OCCUPANCY, False),
+                ),
             }
             self.hass.config_entries.async_update_entry(
                 self._entry,
@@ -183,12 +191,18 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(CONF_OFF_PEAK_START, default=off_peak_start): str,
                 vol.Optional(CONF_OFF_PEAK_END, default=off_peak_end): str,
                 vol.Optional(
-                    CONF_DEPENDENCY_SOLCAST,
-                    default=source.get(CONF_DEPENDENCY_SOLCAST, False),
+                    _DEPENDENCY_SOLCAST_FIELD,
+                    default=source.get(
+                        _DEPENDENCY_SOLCAST_FIELD,
+                        source.get(CONF_DEPENDENCY_SOLCAST, False),
+                    ),
                 ): bool,
                 vol.Optional(
-                    CONF_DEPENDENCY_HOME_OCCUPANCY,
-                    default=source.get(CONF_DEPENDENCY_HOME_OCCUPANCY, False),
+                    _DEPENDENCY_HOME_OCCUPANCY_FIELD,
+                    default=source.get(
+                        _DEPENDENCY_HOME_OCCUPANCY_FIELD,
+                        source.get(CONF_DEPENDENCY_HOME_OCCUPANCY, False),
+                    ),
                 ): bool,
             }
         )

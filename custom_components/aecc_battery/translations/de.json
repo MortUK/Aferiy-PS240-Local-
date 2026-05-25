@@ -28,7 +28,7 @@
     "step": {
       "init": {
         "title": "AFERIY PS240 (Local) neu konfigurieren",
-        "description": "Verbindungsdaten ändern. Home Assistant verbindet sich sofort neu.",
+        "description": "Verbindungsdaten ändern. Home Assistant verbindet sich sofort neu.\n\nOptional helper checklist:",
         "data": {
           "host": "IP-Adresse",
           "port": "TCP-Port",
@@ -38,8 +38,8 @@
           "tariff_preset": "Niedertarif-Voreinstellung",
           "off_peak_start": "Niedertarif-Startzeit",
           "off_peak_end": "Niedertarif-Endzeit",
-          "dependency_solcast_confirmed": "Solcast installed",
-          "dependency_home_occupancy_confirmed": "Home Occupancy enabled"
+          "dependency_solcast_confirmed": "1. Solcast installed",
+          "dependency_home_occupancy_confirmed": "2. Home Occupancy enabled"
         },
         "data_description": {
           "advanced_energy_sensors": "Fügt optionale Schätzsensoren hinzu, die Solarprognose-, Tarif-, Belegungs- und Verbrauchsdaten verwenden können.",
@@ -47,8 +47,8 @@
           "tariff_preset": "Defaults to Octopus Intelligent Go. Named presets store their listed times automatically; choose custom to edit the times manually.",
           "off_peak_start": "Start of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
           "off_peak_end": "End of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
-          "dependency_solcast_confirmed": "Used for timed solar forecasts and solar-aware estimates. The integration currently looks for standard Solcast forecast files and sensors.",
-          "dependency_home_occupancy_confirmed": "Uses Home Assistant's zone.home occupancy count so empty-house periods do not train the normal demand profile."
+          "dependency_solcast_confirmed": "Tick once Solcast PV Forecast is installed. Used for timed solar forecasts and solar-aware estimates.",
+          "dependency_home_occupancy_confirmed": "Tick once home occupancy is enabled. Uses Home Assistant's zone.home occupancy count so empty-house periods do not train the normal demand profile."
         }
       }
     },
