@@ -14,6 +14,11 @@ CONF_MODEL = "model"
 CONF_TARIFF_PRESET = "tariff_preset"
 CONF_OFF_PEAK_START = "off_peak_start"
 CONF_OFF_PEAK_END = "off_peak_end"
+CONF_DEPENDENCY_SOLCAST = "dependency_solcast_confirmed"
+CONF_DEPENDENCY_GRID_METER = "dependency_grid_meter_confirmed"
+CONF_DEPENDENCY_RECORDER = "dependency_recorder_confirmed"
+CONF_DEPENDENCY_OCTOPUS_ENERGY = "dependency_octopus_energy_confirmed"
+CONF_DEPENDENCY_HOME_OCCUPANCY = "dependency_home_occupancy_confirmed"
 
 # Default connection values
 DEFAULT_HOST = "192.168.0.1"
@@ -22,12 +27,26 @@ DEFAULT_NAME = "AFERIY PS240 (Local)"
 DEFAULT_MANUFACTURER = "AFERIY"
 DEFAULT_MODEL = "PS240"
 DEFAULT_TIMEOUT = 5  # seconds
-DEFAULT_TARIFF_PRESET = "octopus_go"
 DEFAULT_OFF_PEAK_START = "23:30"
 DEFAULT_OFF_PEAK_END = "05:30"
+DEFAULT_TARIFF_PRESET = "octopus_intelligent_go"
 TARIFF_PRESETS: dict[str, tuple[str, str]] = {
-    "octopus_go": (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+    "snug_octopus": ("00:30", "06:30"),
+    "octopus_go": ("00:30", "05:30"),
+    "octopus_intelligent_go": (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+    "eon_next_drive": ("00:00", "07:00"),
+    "british_gas_electric_driver": ("00:00", "05:00"),
+    "british_gas_economy_7": ("00:00", "05:00"),
     "custom": (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+}
+TARIFF_PRESET_LABELS: dict[str, str] = {
+    "snug_octopus": "Snug Octopus (00:30-06:30)",
+    "octopus_go": "Octopus Go (00:30-05:30)",
+    "octopus_intelligent_go": "Octopus Intelligent Go (23:30-05:30)",
+    "eon_next_drive": "E.ON Next Drive (00:00-07:00)",
+    "british_gas_electric_driver": "British Gas Electric Driver (00:00-05:00)",
+    "british_gas_economy_7": "British Gas Economy 7 (00:00-05:00)",
+    "custom": "Custom/manual times",
 }
 
 # Polling

@@ -13,6 +13,11 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_ADVANCED_ENERGY_SENSORS,
+    CONF_DEPENDENCY_GRID_METER,
+    CONF_DEPENDENCY_HOME_OCCUPANCY,
+    CONF_DEPENDENCY_OCTOPUS_ENERGY,
+    CONF_DEPENDENCY_RECORDER,
+    CONF_DEPENDENCY_SOLCAST,
     CONF_OFF_PEAK_END,
     CONF_OFF_PEAK_START,
     CONF_TARIFF_PRESET,
@@ -33,6 +38,7 @@ from .const import (
     DOMAIN,
     MIN_POLL_INTERVAL,
     POLL_INTERVAL,
+    TARIFF_PRESET_LABELS,
     TARIFF_PRESETS,
 )
 
@@ -41,8 +47,8 @@ _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _TARIFF_PRESET_SELECTOR = selector.SelectSelector(
     selector.SelectSelectorConfig(
         options=[
-            selector.SelectOptionDict(value="octopus_go", label="Octopus Go (23:30-05:30)"),
-            selector.SelectOptionDict(value="custom", label="Custom/manual times"),
+            selector.SelectOptionDict(value=value, label=TARIFF_PRESET_LABELS[value])
+            for value in TARIFF_PRESETS
         ],
         mode=selector.SelectSelectorMode.DROPDOWN,
     )
@@ -104,8 +110,17 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
             errors: dict[str, str] = {}
-            off_peak_start = user_input.get(CONF_OFF_PEAK_START, DEFAULT_OFF_PEAK_START).strip()
-            off_peak_end = user_input.get(CONF_OFF_PEAK_END, DEFAULT_OFF_PEAK_END).strip()
+            tariff_preset = user_input.get(CONF_TARIFF_PRESET, DEFAULT_TARIFF_PRESET)
+            preset_start, preset_end = TARIFF_PRESETS.get(
+                tariff_preset,
+                (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+            )
+            if tariff_preset == "custom":
+                off_peak_start = user_input.get(CONF_OFF_PEAK_START, DEFAULT_OFF_PEAK_START).strip()
+                off_peak_end = user_input.get(CONF_OFF_PEAK_END, DEFAULT_OFF_PEAK_END).strip()
+            else:
+                off_peak_start = preset_start
+                off_peak_end = preset_end
             if not _TIME_RE.match(off_peak_start):
                 errors[CONF_OFF_PEAK_START] = "invalid_time"
             if not _TIME_RE.match(off_peak_end):
@@ -120,9 +135,14 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
             new_options = {
                 CONF_ADVANCED_ENERGY_SENSORS: user_input.get(CONF_ADVANCED_ENERGY_SENSORS, False),
                 CONF_POLL_INTERVAL: user_input.get(CONF_POLL_INTERVAL, POLL_INTERVAL),
-                CONF_TARIFF_PRESET: user_input.get(CONF_TARIFF_PRESET, DEFAULT_TARIFF_PRESET),
+                CONF_TARIFF_PRESET: tariff_preset,
                 CONF_OFF_PEAK_START: off_peak_start,
                 CONF_OFF_PEAK_END: off_peak_end,
+                CONF_DEPENDENCY_SOLCAST: user_input.get(CONF_DEPENDENCY_SOLCAST, False),
+                CONF_DEPENDENCY_GRID_METER: user_input.get(CONF_DEPENDENCY_GRID_METER, False),
+                CONF_DEPENDENCY_RECORDER: user_input.get(CONF_DEPENDENCY_RECORDER, False),
+                CONF_DEPENDENCY_OCTOPUS_ENERGY: user_input.get(CONF_DEPENDENCY_OCTOPUS_ENERGY, False),
+                CONF_DEPENDENCY_HOME_OCCUPANCY: user_input.get(CONF_DEPENDENCY_HOME_OCCUPANCY, False),
             }
             self.hass.config_entries.async_update_entry(
                 self._entry,
@@ -168,5 +188,25 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
                 ): _TARIFF_PRESET_SELECTOR,
                 vol.Optional(CONF_OFF_PEAK_START, default=off_peak_start): str,
                 vol.Optional(CONF_OFF_PEAK_END, default=off_peak_end): str,
+                vol.Optional(
+                    CONF_DEPENDENCY_SOLCAST,
+                    default=source.get(CONF_DEPENDENCY_SOLCAST, False),
+                ): bool,
+                vol.Optional(
+                    CONF_DEPENDENCY_GRID_METER,
+                    default=source.get(CONF_DEPENDENCY_GRID_METER, False),
+                ): bool,
+                vol.Optional(
+                    CONF_DEPENDENCY_RECORDER,
+                    default=source.get(CONF_DEPENDENCY_RECORDER, False),
+                ): bool,
+                vol.Optional(
+                    CONF_DEPENDENCY_OCTOPUS_ENERGY,
+                    default=source.get(CONF_DEPENDENCY_OCTOPUS_ENERGY, False),
+                ): bool,
+                vol.Optional(
+                    CONF_DEPENDENCY_HOME_OCCUPANCY,
+                    default=source.get(CONF_DEPENDENCY_HOME_OCCUPANCY, False),
+                ): bool,
             }
         )

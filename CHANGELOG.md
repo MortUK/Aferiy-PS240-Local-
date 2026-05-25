@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.19
+
+- Added off-peak tariff presets for Snug Octopus, Octopus Go, Octopus Intelligent Go, E.ON Next Drive, British Gas Electric Driver, and British Gas Economy 7.
+- Changed the default off-peak preset to Octopus Intelligent Go, 23:30-05:30.
+- Made named tariff presets store their listed hours automatically; custom mode keeps manual start and end times.
+- Added installer-facing external dependency confirmation checkboxes for Solcast, whole-home grid metering, Recorder history, Octopus Energy sensors, and home occupancy.
+
 ## 1.4.18
 
 - Improved the Recommended Overnight SOC calculation with a dynamic buffer that grows when demand history, timed solar forecast data, or pre-sunrise coverage is weaker.

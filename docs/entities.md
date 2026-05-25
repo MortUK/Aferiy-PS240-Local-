@@ -57,3 +57,15 @@ Pre-Sunrise Need is the estimated energy needed after the cheap-rate window ends
 Useful attributes include `recommendation_reason`, `pre_sunrise_need_kwh`, `dynamic_buffer_soc`, `battery_loss_allowance_kwh`, `estimated_grid_charge_energy_to_target_kwh`, and `target_jump_guard`.
 
 For best results, enable the advanced estimate sensors, configure the battery capacity correctly, keep Home Assistant recorder history available, and provide Solcast forecast sensors. Without enough data the sensor may use conservative defaults or show that it cannot calculate a reliable target.
+
+## External Dependencies
+
+The options page includes confirmation checkboxes for the common external helpers used by the advanced estimates:
+
+- Solcast PV Forecast, for timed solar forecast data
+- Whole-home grid meter, such as Shelly Pro 3EM, for trusted import/export comparison
+- Home Assistant Recorder history, for time-of-day demand profiles
+- Octopus Energy tariff sensors, for off-peak and free-electricity automations
+- Home occupancy through `zone.home`, for empty-house demand handling
+
+These checkboxes are installer reminders. They do not install the integrations or block setup.
