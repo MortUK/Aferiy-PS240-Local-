@@ -63,9 +63,7 @@ For best results, enable the advanced estimate sensors, configure the battery ca
 The options page includes confirmation checkboxes for common external helpers:
 
 - Solcast PV Forecast, for timed solar forecast data
-- Whole-home grid meter, such as Shelly Pro 3EM, for trusted import/export comparison
-- Home Assistant Recorder history, for time-of-day demand profiles
 - Home occupancy through `zone.home`, for empty-house demand handling
-- Octopus Energy tariff sensors, only for automations or diagnostics that react to live off-peak/free-electricity entities
+- Shelly Smart Meter, for trusted import/export comparison when common Shelly helper entities are present
 
 These checkboxes are installer reminders. They do not install integrations or block setup.

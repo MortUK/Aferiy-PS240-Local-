@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.21
+
+- Simplified the installer helper checklist to Solcast installed, Shelly Smart Meter installed, and Home Occupancy enabled.
+- Removed Octopus Energy and Recorder from the options checklist to avoid implying they are integration requirements.
+- Clarified that helper checkboxes are reminders, while the integration currently looks for known Solcast, Shelly, and `zone.home` entities rather than auto-discovering every installation.
+
 ## 1.4.20
 
 - Clarified that Octopus Energy sensors are optional helpers for automations and diagnostics, not required by the core local battery integration.

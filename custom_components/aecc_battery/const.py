@@ -16,8 +16,6 @@ CONF_OFF_PEAK_START = "off_peak_start"
 CONF_OFF_PEAK_END = "off_peak_end"
 CONF_DEPENDENCY_SOLCAST = "dependency_solcast_confirmed"
 CONF_DEPENDENCY_GRID_METER = "dependency_grid_meter_confirmed"
-CONF_DEPENDENCY_RECORDER = "dependency_recorder_confirmed"
-CONF_DEPENDENCY_OCTOPUS_ENERGY = "dependency_octopus_energy_confirmed"
 CONF_DEPENDENCY_HOME_OCCUPANCY = "dependency_home_occupancy_confirmed"
 
 # Default connection values

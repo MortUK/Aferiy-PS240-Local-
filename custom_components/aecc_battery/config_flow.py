@@ -15,8 +15,6 @@ from .const import (
     CONF_ADVANCED_ENERGY_SENSORS,
     CONF_DEPENDENCY_GRID_METER,
     CONF_DEPENDENCY_HOME_OCCUPANCY,
-    CONF_DEPENDENCY_OCTOPUS_ENERGY,
-    CONF_DEPENDENCY_RECORDER,
     CONF_DEPENDENCY_SOLCAST,
     CONF_OFF_PEAK_END,
     CONF_OFF_PEAK_START,
@@ -140,8 +138,6 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
                 CONF_OFF_PEAK_END: off_peak_end,
                 CONF_DEPENDENCY_SOLCAST: user_input.get(CONF_DEPENDENCY_SOLCAST, False),
                 CONF_DEPENDENCY_GRID_METER: user_input.get(CONF_DEPENDENCY_GRID_METER, False),
-                CONF_DEPENDENCY_RECORDER: user_input.get(CONF_DEPENDENCY_RECORDER, False),
-                CONF_DEPENDENCY_OCTOPUS_ENERGY: user_input.get(CONF_DEPENDENCY_OCTOPUS_ENERGY, False),
                 CONF_DEPENDENCY_HOME_OCCUPANCY: user_input.get(CONF_DEPENDENCY_HOME_OCCUPANCY, False),
             }
             self.hass.config_entries.async_update_entry(
@@ -195,14 +191,6 @@ class AeccBatteryOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_DEPENDENCY_GRID_METER,
                     default=source.get(CONF_DEPENDENCY_GRID_METER, False),
-                ): bool,
-                vol.Optional(
-                    CONF_DEPENDENCY_RECORDER,
-                    default=source.get(CONF_DEPENDENCY_RECORDER, False),
-                ): bool,
-                vol.Optional(
-                    CONF_DEPENDENCY_OCTOPUS_ENERGY,
-                    default=source.get(CONF_DEPENDENCY_OCTOPUS_ENERGY, False),
                 ): bool,
                 vol.Optional(
                     CONF_DEPENDENCY_HOME_OCCUPANCY,

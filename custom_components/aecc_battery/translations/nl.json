@@ -38,11 +38,9 @@
           "tariff_preset": "Daluren-tariefpreset",
           "off_peak_start": "Starttijd daluren",
           "off_peak_end": "Eindtijd daluren",
-          "dependency_solcast_confirmed": "Installed: Solcast PV Forecast",
-          "dependency_grid_meter_confirmed": "Installed: whole-home grid meter",
-          "dependency_recorder_confirmed": "Enabled: Home Assistant Recorder history",
-          "dependency_octopus_energy_confirmed": "Optional: Octopus Energy automation sensors",
-          "dependency_home_occupancy_confirmed": "Configured: home occupancy / zone.home"
+          "dependency_solcast_confirmed": "Solcast installed",
+          "dependency_grid_meter_confirmed": "Shelly Smart Meter installed",
+          "dependency_home_occupancy_confirmed": "Home Occupancy enabled"
         },
         "data_description": {
           "advanced_energy_sensors": "Voegt optionele inschattingssensoren toe die externe net-, zonneprognose- en huishoudverbruik-entiteiten kunnen gebruiken.",
@@ -50,11 +48,9 @@
           "tariff_preset": "Defaults to Octopus Intelligent Go. Named presets store their listed times automatically; choose custom to edit the times manually.",
           "off_peak_start": "Start of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
           "off_peak_end": "End of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
-          "dependency_solcast_confirmed": "Needed for timed solar forecasts, Will Fill Today, charge-time estimates, and the smarter overnight target.",
-          "dependency_grid_meter_confirmed": "Recommended for trusted import/export comparison. A Shelly Pro 3EM or equivalent whole-home CT meter is ideal.",
-          "dependency_recorder_confirmed": "Needed so runtime and overnight target estimates can learn normal house demand by time of day.",
-          "dependency_octopus_energy_confirmed": "Only needed for automations or diagnostics that react to Octopus off-peak/free-electricity sensors. The integration can use the configured tariff window without it.",
-          "dependency_home_occupancy_confirmed": "Recommended so empty-house periods do not train the normal demand profile."
+          "dependency_solcast_confirmed": "Used for timed solar forecasts and solar-aware estimates. The integration currently looks for standard Solcast forecast files and sensors.",
+          "dependency_grid_meter_confirmed": "Installer reminder for trusted import/export comparison. Battery control and overnight estimates can still use the AECC grid reading.",
+          "dependency_home_occupancy_confirmed": "Uses Home Assistant's zone.home occupancy count so empty-house periods do not train the normal demand profile."
         }
       }
     },
