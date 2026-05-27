@@ -138,11 +138,14 @@ _SOLAR_UNAVAILABLE_ENTITY = "switch.aecc_battery_solar_unavailable"
 _FORECAST_PERIOD = timedelta(minutes=30)
 _RUNTIME_DEMAND_HISTORY_WINDOW = timedelta(hours=3)
 _RUNTIME_DEMAND_MIN_HISTORY = timedelta(minutes=15)
-_RUNTIME_RECORDER_HISTORY_DAYS = 7
+_RUNTIME_RECORDER_HISTORY_DAYS = 14
 _RUNTIME_RECORDER_REFRESH_INTERVAL = timedelta(minutes=30)
 _RUNTIME_PROFILE_HORIZON = timedelta(hours=24)
 _RUNTIME_PROFILE_INTERVAL = timedelta(minutes=30)
 _RUNTIME_PROFILE_MAX_CYCLES = 14
+_RUNTIME_RECORDER_RECENCY_DECAY = 0.9
+_RUNTIME_RECORDER_MIN_DAY_WEIGHT = 0.35
+_RUNTIME_RECORDER_SAME_WEEKDAY_BOOST = 1.25
 _RUNTIME_MIN_VALID_DAILY_AVERAGE_W = 150.0
 _RUNTIME_MIN_VALID_DAY_MEDIAN_FACTOR = 0.5
 _RUNTIME_SOLAR_ACTIVE_THRESHOLD_W = 100.0
@@ -1733,6 +1736,11 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                     continue
 
                 average_w = watt_seconds / duration_seconds
+                history_weight, history_weight_reasons = self._history_day_weight(
+                    days_ago,
+                    window_start_local,
+                    local_now,
+                )
                 daily_results.append(
                     {
                         "days_ago": days_ago,
@@ -1742,6 +1750,8 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                         "average_w": round(average_w, 1),
                         "energy_kwh": round(watt_seconds / 3_600_000, 3),
                         "source": history_source,
+                        "history_weight": history_weight,
+                        "history_weight_reasons": history_weight_reasons,
                     }
                 )
 
@@ -1751,16 +1761,19 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
             profile_totals: dict[int, dict[str, float]] = {}
             total_duration_seconds = 0.0
             total_watt_seconds = 0.0
+            total_history_weight = 0.0
             for day in daily_averages:
-                total_duration_seconds += float(day["duration_seconds"])
-                total_watt_seconds += float(day["watt_seconds"])
+                history_weight = max(0.0, float(day.get("history_weight", 1.0)))
+                total_history_weight += history_weight
+                total_duration_seconds += float(day["duration_seconds"]) * history_weight
+                total_watt_seconds += float(day["watt_seconds"]) * history_weight
                 for bucket_index, bucket in day["profile_buckets"].items():
                     profile_bucket = profile_totals.setdefault(
                         bucket_index,
                         {"duration_seconds": 0.0, "watt_seconds": 0.0},
                     )
-                    profile_bucket["duration_seconds"] += bucket["duration_seconds"]
-                    profile_bucket["watt_seconds"] += bucket["watt_seconds"]
+                    profile_bucket["duration_seconds"] += bucket["duration_seconds"] * history_weight
+                    profile_bucket["watt_seconds"] += bucket["watt_seconds"] * history_weight
 
             if total_duration_seconds <= 0:
                 self._recorder_average_demand_w = None
@@ -1780,7 +1793,9 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                 }
             else:
                 average_w = total_watt_seconds / total_duration_seconds
-                average_window_energy_kwh = total_watt_seconds / len(daily_averages) / 3_600_000
+                average_window_energy_kwh = (
+                    total_watt_seconds / max(total_history_weight, 1.0) / 3_600_000
+                )
                 demand_profile = self._profile_from_bucket_totals(profile_totals)
                 self._recorder_average_demand_w = average_w
                 self._recorder_demand_profile = demand_profile
@@ -1791,6 +1806,11 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
                     "recorder_history_interval_minutes": round(_RUNTIME_PROFILE_INTERVAL.total_seconds() / 60, 1),
                     "recorder_history_valid_days": len(daily_averages),
+                    "recorder_history_weighting": "recency_decay_with_same_weekday_boost",
+                    "recorder_history_recency_decay": _RUNTIME_RECORDER_RECENCY_DECAY,
+                    "recorder_history_min_day_weight": _RUNTIME_RECORDER_MIN_DAY_WEIGHT,
+                    "recorder_history_same_weekday_boost": _RUNTIME_RECORDER_SAME_WEEKDAY_BOOST,
+                    "recorder_history_total_weight": round(total_history_weight, 3),
                     "recorder_history_rejected_days": len(rejected_daily_averages),
                     "recorder_history_skipped_away_days": skipped_away_days,
                     "recorder_history_demand_w": round(average_w, 1),
@@ -1820,6 +1840,23 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                 self.async_write_ha_state()
             except RuntimeError:
                 pass
+
+    @staticmethod
+    def _history_day_weight(
+        days_ago: int,
+        window_start_local: datetime,
+        target_local: datetime,
+    ) -> tuple[float, list[str]]:
+        days_back = max(0, days_ago - 1)
+        weight = max(
+            _RUNTIME_RECORDER_MIN_DAY_WEIGHT,
+            _RUNTIME_RECORDER_RECENCY_DECAY**days_back,
+        )
+        reasons = ["recency_weighted"]
+        if window_start_local.weekday() == target_local.weekday():
+            weight *= _RUNTIME_RECORDER_SAME_WEEKDAY_BOOST
+            reasons.append("same_weekday_boost")
+        return round(weight, 3), reasons
 
     @staticmethod
     def _filter_runtime_history_days(
@@ -1855,6 +1892,8 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                 "average_w": day["average_w"],
                 "energy_kwh": day["energy_kwh"],
                 "source": day["source"],
+                "history_weight": day.get("history_weight"),
+                "history_weight_reasons": day.get("history_weight_reasons"),
             }
             if average_w < minimum_average_w:
                 rejected.append(
@@ -1877,6 +1916,8 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                 "average_w": day["average_w"],
                 "energy_kwh": day["energy_kwh"],
                 "source": day["source"],
+                "history_weight": day.get("history_weight"),
+                "history_weight_reasons": day.get("history_weight_reasons"),
             }
             for day in daily_results
         ]
@@ -2539,6 +2580,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         fallback_demand_w = fallback_daily_kwh * 1000 / 24
         recorder_history_attrs = self._current_recorder_history_attrs(now)
         solar_unavailable = self._solar_unavailable_override()
+        solar_unavailable_entity = self._solar_unavailable_entity_id()
 
         attrs: dict[str, Any] = {
             "calculated_at": now.isoformat(),
@@ -2553,7 +2595,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "reserve_soc": round(reserve_soc, 1),
             "solcast_tomorrow_kwh": self._state_energy_kwh(_SOLCAST_TOMORROW_ENTITY),
             "solar_unavailable_override": solar_unavailable,
-            "solar_unavailable_entity": _SOLAR_UNAVAILABLE_ENTITY,
+            "solar_unavailable_entity": solar_unavailable_entity,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
             **fallback_attrs,
             **recorder_history_attrs,
@@ -2998,9 +3040,18 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
 
     def _solar_unavailable_override(self) -> bool:
         return bool(getattr(self.coordinator, "solar_unavailable_override", False)) or self.hass.states.is_state(
-            _SOLAR_UNAVAILABLE_ENTITY,
+            self._solar_unavailable_entity_id(),
             "on",
         )
+
+    def _solar_unavailable_entity_id(self) -> str:
+        registry = er.async_get(self.hass)
+        entity_id = registry.async_get_entity_id(
+            "switch",
+            DOMAIN,
+            f"{self._config_entry.entry_id}_solar_unavailable",
+        )
+        return entity_id or _SOLAR_UNAVAILABLE_ENTITY
 
     @staticmethod
     def _recommendation_reason(

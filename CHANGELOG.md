@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.1
+
+- Extended the smart overnight demand-history lookback from 7 to 14 days.
+- Weighted recent house-demand history more strongly while keeping older valid days as smoothing data.
+- Added a small same-weekday boost so matching weekday patterns have more influence.
+- Exposed demand-history weighting details on the Recommended Overnight SOC sensor attributes.
+- Resolved the Solar Unavailable switch entity ID from the entity registry instead of relying on a hardcoded dashboard-style name.
+
 ## 1.5.0
 
 - Added Recommended Overnight SOC target breakdown attributes for dashboards.

@@ -1,7 +1,7 @@
 # AFERIY PS240 (Local)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.5.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.5.1-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 
@@ -75,8 +75,9 @@ The external helper checkboxes are reminders for installers. They do not install
 The optional Recommended Overnight SOC sensor helps users with cheap overnight electricity charge only what they are likely to need before the next off-peak window, using tomorrow's solar forecast to reduce unnecessary grid charging.
 
 - Uses the configured battery capacity and reserve/minimum SOC.
-- Learns a time-of-day house demand profile from recent Home Assistant history.
+- Learns a weighted 14-day time-of-day house demand profile from Home Assistant history.
 - Ignores mostly empty-house days using `zone.home` occupancy.
+- Weights recent days more strongly and gives matching weekdays a small boost.
 - Subtracts AFERIY AC charging from daily fallback demand.
 - Uses Solcast, preferably timed forecast data, instead of previous clipped solar output.
 - Estimates Pre-Sunrise Need from the off-peak end until sustained forecast solar should cover house demand.
