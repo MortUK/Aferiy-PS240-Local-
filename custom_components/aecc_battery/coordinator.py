@@ -143,6 +143,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.commanded_charge_power: int = 800
         self.commanded_discharge_power: int = 800
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
+        self.solar_unavailable_override: bool = False
         self._commanded_min_soc: int = 10
         self._commanded_max_soc: int = 100
         self.extended_power: bool = extended_power

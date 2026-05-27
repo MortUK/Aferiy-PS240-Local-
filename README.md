@@ -1,6 +1,7 @@
 # AFERIY PS240 (Local)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
+[![Version](https://img.shields.io/badge/version-v1.5.0-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 
@@ -79,6 +80,9 @@ The optional Recommended Overnight SOC sensor helps users with cheap overnight e
 - Subtracts AFERIY AC charging from daily fallback demand.
 - Uses Solcast, preferably timed forecast data, instead of previous clipped solar output.
 - Estimates Pre-Sunrise Need from the off-peak end until sustained forecast solar should cover house demand.
+- Gives weak early-morning forecast solar partial credit until sustained useful solar is expected.
+- On low-solar days with no useful solar handover, still credits part of the forecast solar before converting the remaining kWh need into a battery-size-aware SOC target.
+- Includes a Solar Unavailable integration switch, treating forecast solar as 0 kWh and showing Batteries Only status.
 - Adds battery loss, grid charge loss, a dynamic buffer, and a forecast confidence adjustment.
 - Applies a safer minimum SOC if Solcast or demand history is stale or missing.
 - Exposes a plain-English target breakdown so dashboards can show why the target was chosen.

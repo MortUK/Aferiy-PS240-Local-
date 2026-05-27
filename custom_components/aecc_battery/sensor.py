@@ -134,6 +134,7 @@ _OCTOPUS_OFF_PEAK_ENTITY = (
     "binary_sensor.octopus_energy_electricity_19k0195462_1900042087502_off_peak"
 )
 _OVERNIGHT_SMART_CHARGE_ENTITY = "input_boolean.overnight_smart_charge"
+_SOLAR_UNAVAILABLE_ENTITY = "switch.aecc_battery_solar_unavailable"
 _FORECAST_PERIOD = timedelta(minutes=30)
 _RUNTIME_DEMAND_HISTORY_WINDOW = timedelta(hours=3)
 _RUNTIME_DEMAND_MIN_HISTORY = timedelta(minutes=15)
@@ -168,8 +169,10 @@ _OVERNIGHT_CONFIDENCE_LOW_ADJUSTMENT_SOC = 10
 _OVERNIGHT_STALE_DATA_MIN_SOC = 50
 _OVERNIGHT_EMPTY_HOUSE_STALE_DATA_MIN_SOC = 25
 _OVERNIGHT_USEFUL_SOLAR_CONSECUTIVE_PERIODS = 2
-_OVERNIGHT_USEFUL_SOLAR_MARGIN_W = 150.0
-_OVERNIGHT_USEFUL_SOLAR_DEMAND_FACTOR = 1.2
+_OVERNIGHT_USEFUL_SOLAR_MARGIN_W = 75.0
+_OVERNIGHT_USEFUL_SOLAR_DEMAND_FACTOR = 1.1
+_OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR = 0.25
+_OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR = 0.7
 _OCCUPIED_DAILY_DEMAND_FLOOR_KWH = 9.0
 _EMPTY_HOUSE_DAILY_DEMAND_FLOOR_KWH = 3.0
 
@@ -2535,6 +2538,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         fallback_daily_kwh, fallback_attrs = self._fallback_daily_demand_kwh()
         fallback_demand_w = fallback_daily_kwh * 1000 / 24
         recorder_history_attrs = self._current_recorder_history_attrs(now)
+        solar_unavailable = self._solar_unavailable_override()
 
         attrs: dict[str, Any] = {
             "calculated_at": now.isoformat(),
@@ -2548,6 +2552,9 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "current_soc": round(soc, 1) if soc is not None else None,
             "reserve_soc": round(reserve_soc, 1),
             "solcast_tomorrow_kwh": self._state_energy_kwh(_SOLCAST_TOMORROW_ENTITY),
+            "solar_unavailable_override": solar_unavailable,
+            "solar_unavailable_entity": _SOLAR_UNAVAILABLE_ENTITY,
+            "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
             **fallback_attrs,
             **recorder_history_attrs,
         }
@@ -2557,7 +2564,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             attrs["reason"] = "Battery capacity is unavailable"
             return None, attrs
 
-        projection = self._project_peak_window(start, end, now, fallback_demand_w)
+        projection = self._project_peak_window(start, end, now, fallback_demand_w, solar_unavailable)
         attrs.update(projection)
         forecast_health_attrs = self._solar_forecast_health_attrs(projection, now)
         confidence_adjustment_soc, confidence_attrs = self._confidence_adjustment_soc(
@@ -2906,6 +2913,10 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             projection.get("pre_sunrise_need_kwh", projection.get("morning_pre_solar_shortfall_kwh")),
             0.0,
         ) or 0.0
+        pre_sunrise_net_need_kwh = _as_float(projection.get("pre_sunrise_net_need_kwh"), 0.0) or 0.0
+        pre_sunrise_credited_solar_kwh = (
+            _as_float(projection.get("pre_sunrise_credited_solar_kwh"), 0.0) or 0.0
+        )
         buffer_soc = _as_float(buffer_attrs.get("dynamic_buffer_soc"), 0.0) or 0.0
         confidence_soc = _as_float(confidence_attrs.get("forecast_confidence_adjustment_soc"), 0.0) or 0.0
 
@@ -2916,6 +2927,13 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "projected_house_demand_kwh": round(projected_house_kwh, 3),
             "projected_solar_kwh": round(projected_solar_kwh, 3),
             "pre_sunrise_need_kwh": round(pre_sunrise_need_kwh, 3),
+            "pre_sunrise_net_need_kwh": round(pre_sunrise_net_need_kwh, 3),
+            "pre_sunrise_credited_solar_kwh": round(pre_sunrise_credited_solar_kwh, 3),
+            "pre_sunrise_solar_credit_factor": projection.get("pre_sunrise_solar_credit_factor"),
+            "no_useful_solar_forecast": projection.get("no_useful_solar_forecast"),
+            "solar_credit_mode": projection.get("solar_credit_mode"),
+            "solar_unavailable_override": projection.get("solar_unavailable_override"),
+            "solar_override_status": projection.get("solar_override_status"),
             "peak_window_need_kwh": round(required_ac_kwh, 3),
             "battery_energy_before_buffer_kwh": round(required_battery_kwh, 3),
             "loss_allowance_kwh": round(loss_allowance_kwh, 3),
@@ -2932,6 +2950,10 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             f"Pre-Sunrise Need {pre_sunrise_need_kwh:.2f} kWh; "
             f"losses {loss_allowance_kwh:.2f} kWh; buffer {buffer_soc:.0f}%"
         )
+        if projection.get("no_useful_solar_forecast"):
+            summary += f"; low-solar credit {pre_sunrise_credited_solar_kwh:.2f} kWh"
+        if projection.get("solar_unavailable_override"):
+            summary += "; Solar Unavailable: Batteries Only"
         if confidence_soc:
             summary += f"; confidence +{confidence_soc:.0f}%"
         if stale_guard_attrs.get("stale_data_guard_active"):
@@ -2974,6 +2996,12 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "target_change_same_local_day": self._previous_recommendation_date == local_date,
         }
 
+    def _solar_unavailable_override(self) -> bool:
+        return bool(getattr(self.coordinator, "solar_unavailable_override", False)) or self.hass.states.is_state(
+            _SOLAR_UNAVAILABLE_ENTITY,
+            "on",
+        )
+
     @staticmethod
     def _recommendation_reason(
         target_soc: int,
@@ -2998,7 +3026,9 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             f"Target {target_soc}%: Pre-Sunrise Need {pre_sunrise_need_kwh:.2f} kWh; "
             f"peak-window need {required_ac_kwh:.2f} kWh, loss allowance {loss_allowance_kwh:.2f} kWh, "
             f"dynamic buffer {buffer_kwh:.2f} kWh ({buffer_attrs.get('dynamic_buffer_soc')}%), "
-            f"forecast solar {projected_solar_kwh:.1f} kWh{grid_text}."
+            f"forecast solar {projected_solar_kwh:.1f} kWh"
+            f"{' (Solar Unavailable: Batteries Only)' if projection.get('solar_unavailable_override') else ''}"
+            f"{grid_text}."
         )
 
     @staticmethod
@@ -3093,11 +3123,25 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         end: datetime,
         now: datetime,
         fallback_demand_w: float,
+        solar_unavailable: bool,
     ) -> dict[str, Any]:
-        forecasts = self._load_solcast_forecasts()
-        if forecasts:
-            return self._simulate_peak_window(start, end, now, fallback_demand_w, forecasts)
-        return self._fallback_projection_without_timed_forecast(start, end, now, fallback_demand_w)
+        forecasts = [] if solar_unavailable else self._load_solcast_forecasts()
+        if forecasts or solar_unavailable:
+            return self._simulate_peak_window(
+                start,
+                end,
+                now,
+                fallback_demand_w,
+                forecasts,
+                solar_unavailable,
+            )
+        return self._fallback_projection_without_timed_forecast(
+            start,
+            end,
+            now,
+            fallback_demand_w,
+            solar_unavailable,
+        )
 
     def _simulate_peak_window(
         self,
@@ -3106,6 +3150,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         now: datetime,
         fallback_demand_w: float,
         forecasts: list[dict[str, Any]],
+        solar_unavailable: bool = False,
     ) -> dict[str, Any]:
         profile = self._profile_by_bucket()
         profile_start = self._recorder_profile_start or now
@@ -3117,7 +3162,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         demand_kwh = 0.0
         solar_kwh = 0.0
         pre_useful_solar_open = True
-        pre_sunrise_need_kwh = 0.0
+        pre_sunrise_net_need_kwh = 0.0
         pre_sunrise_demand_kwh = 0.0
         pre_sunrise_solar_kwh = 0.0
         pre_sunrise_profile_bucket_count = 0
@@ -3153,8 +3198,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             if is_pre_sunrise_segment:
                 pre_sunrise_demand_kwh += segment_demand_kwh
                 pre_sunrise_solar_kwh += segment_solar_kwh
-                pre_sunrise_need_kwh = max(
-                    pre_sunrise_need_kwh,
+                pre_sunrise_net_need_kwh = max(
+                    pre_sunrise_net_need_kwh,
                     cumulative_deficit_kwh,
                 )
                 if used_profile:
@@ -3176,23 +3221,57 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                     useful_solar_consecutive_periods = 0
             current = segment_end
 
+        no_useful_solar_forecast = useful_solar_start_at is None
+        pre_sunrise_solar_credit_factor = (
+            _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR
+            if no_useful_solar_forecast
+            else _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR
+        )
+        pre_sunrise_credited_solar_kwh = pre_sunrise_solar_kwh * pre_sunrise_solar_credit_factor
+        pre_sunrise_guard_need_kwh = max(
+            0.0,
+            pre_sunrise_demand_kwh - pre_sunrise_credited_solar_kwh,
+        )
+        required_start_energy_kwh = max(maximum_deficit_kwh, pre_sunrise_guard_need_kwh)
+        pre_sunrise_basis = (
+            "no_sustained_useful_solar_forecast_with_partial_day_solar_credit"
+            if no_useful_solar_forecast
+            else "until_sustained_forecast_solar_exceeds_house_demand_with_partial_early_solar_credit"
+        )
+        solar_credit_mode = (
+            "low_solar_day_partial_forecast_credit"
+            if no_useful_solar_forecast
+            else "pre_useful_solar_ramp_partial_credit"
+        )
+
         return {
             "method": "timed_solcast_forecast_minus_time_of_day_house_demand",
-            "solar_forecast_source": "Solcast detailed forecast file",
-            "solar_forecast_path": self._forecast_cache_path,
+            "solar_forecast_source": (
+                "Solar Unavailable override" if solar_unavailable else "Solcast detailed forecast file"
+            ),
+            "solar_forecast_path": None if solar_unavailable else self._forecast_cache_path,
             "projected_peak_house_demand_kwh": round(demand_kwh, 3),
             "projected_peak_solar_kwh": round(solar_kwh, 3),
-            "required_start_energy_kwh": round(maximum_deficit_kwh, 3),
+            "solar_unavailable_override": solar_unavailable,
+            "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
+            "required_start_energy_kwh": round(required_start_energy_kwh, 3),
             "maximum_cumulative_deficit_kwh": round(maximum_deficit_kwh, 3),
-            "pre_sunrise_need_kwh": round(pre_sunrise_need_kwh, 3),
+            "pre_sunrise_need_kwh": round(pre_sunrise_guard_need_kwh, 3),
+            "pre_sunrise_net_need_kwh": round(pre_sunrise_net_need_kwh, 3),
+            "pre_sunrise_guard_need_kwh": round(pre_sunrise_guard_need_kwh, 3),
             "pre_sunrise_house_demand_kwh": round(pre_sunrise_demand_kwh, 3),
             "pre_sunrise_solar_kwh": round(pre_sunrise_solar_kwh, 3),
+            "pre_sunrise_credited_solar_kwh": round(pre_sunrise_credited_solar_kwh, 3),
+            "pre_sunrise_solar_credit_factor": pre_sunrise_solar_credit_factor,
+            "no_useful_solar_forecast": no_useful_solar_forecast,
+            "low_solar_day_credit_factor": _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR,
+            "solar_credit_mode": solar_credit_mode,
             "pre_sunrise_solar_start_at": (
                 first_solar_start_at.isoformat() if first_solar_start_at else None
             ),
             "useful_solar_start_at": useful_solar_start_at.isoformat() if useful_solar_start_at else None,
             "solar_break_even_at": useful_solar_start_at.isoformat() if useful_solar_start_at else None,
-            "pre_sunrise_basis": "until_sustained_forecast_solar_exceeds_house_demand",
+            "pre_sunrise_basis": pre_sunrise_basis,
             "useful_solar_consecutive_periods_required": _OVERNIGHT_USEFUL_SOLAR_CONSECUTIVE_PERIODS,
             "useful_solar_margin_w": _OVERNIGHT_USEFUL_SOLAR_MARGIN_W,
             "useful_solar_demand_factor": _OVERNIGHT_USEFUL_SOLAR_DEMAND_FACTOR,
@@ -3204,7 +3283,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "pre_sunrise_profile_buckets_used": pre_sunrise_profile_bucket_count,
             "pre_sunrise_fallback_buckets_used": pre_sunrise_fallback_bucket_count,
             "pre_sunrise_label": "Pre-Sunrise Need",
-            "morning_pre_solar_shortfall_kwh": round(pre_sunrise_need_kwh, 3),
+            "morning_pre_solar_shortfall_kwh": round(pre_sunrise_guard_need_kwh, 3),
             "morning_solar_start_at": (
                 first_solar_start_at.isoformat() if first_solar_start_at else None
             ),
@@ -3221,21 +3300,31 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         end: datetime,
         now: datetime,
         fallback_demand_w: float,
+        solar_unavailable: bool = False,
     ) -> dict[str, Any]:
         peak_demand_kwh = self._project_demand_energy_kwh(start, end, now, fallback_demand_w)
         morning_end = min(end, start + timedelta(hours=5))
         morning_gap_kwh = self._project_demand_energy_kwh(start, morning_end, now, fallback_demand_w)
-        forecast_kwh = self._state_energy_kwh(_SOLCAST_TOMORROW_ENTITY) or 0.0
+        forecast_kwh = 0.0 if solar_unavailable else (self._state_energy_kwh(_SOLCAST_TOMORROW_ENTITY) or 0.0)
         daily_deficit_kwh = max(0.0, peak_demand_kwh - forecast_kwh)
         required_kwh = max(morning_gap_kwh, daily_deficit_kwh)
         return {
             "method": "daily_solcast_sensor_with_morning_gap_fallback",
-            "solar_forecast_source": _SOLCAST_TOMORROW_ENTITY,
+            "solar_forecast_source": "Solar Unavailable override" if solar_unavailable else _SOLCAST_TOMORROW_ENTITY,
             "projected_peak_house_demand_kwh": round(peak_demand_kwh, 3),
             "projected_peak_solar_kwh": round(forecast_kwh, 3),
+            "solar_unavailable_override": solar_unavailable,
+            "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
             "pre_sunrise_need_kwh": round(morning_gap_kwh, 3),
+            "pre_sunrise_net_need_kwh": round(morning_gap_kwh, 3),
+            "pre_sunrise_guard_need_kwh": round(morning_gap_kwh, 3),
             "pre_sunrise_house_demand_kwh": round(morning_gap_kwh, 3),
             "pre_sunrise_solar_kwh": 0.0,
+            "pre_sunrise_credited_solar_kwh": 0.0,
+            "pre_sunrise_solar_credit_factor": _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR,
+            "no_useful_solar_forecast": None,
+            "low_solar_day_credit_factor": _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR,
+            "solar_credit_mode": "daily_sensor_fallback",
             "pre_sunrise_solar_start_at": None,
             "useful_solar_start_at": None,
             "solar_break_even_at": None,

@@ -31,10 +31,10 @@ from .tcp_manager import TCPClientManager
 
 _LOGGER = logging.getLogger(__name__)
 
-# The EMS switch is intentionally not loaded for this setup. Normal control
-# should go through the clean Operating Mode select to avoid accidental raw EMS
-# toggles.
-PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SELECT]
+# The switch platform only exposes local helper switches. Raw EMS control is
+# deliberately not exposed; normal battery control should go through the clean
+# Operating Mode select.
+PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SELECT, Platform.SWITCH]
 
 SERVICE_SNAPSHOT_CONTROL_REGISTERS = "snapshot_control_registers"
 SERVICE_SNAPSHOT_POWER_FLOW = "snapshot_power_flow"
@@ -77,6 +77,7 @@ POWER_FLOW_ENTITY_IDS = (
     "sensor.aferiy_actual_bat_basic_discharge_power",
     "sensor.aferiy_zero_feed_in",
     "sensor.aferiy_generation_self_consumption",
+    "switch.aecc_battery_solar_unavailable",
 )
 
 POWER_FLOW_ATTRIBUTE_KEYS = (
@@ -94,8 +95,17 @@ POWER_FLOW_ATTRIBUTE_KEYS = (
     "estimated_hours_to_target",
     "pre_sunrise_label",
     "pre_sunrise_need_kwh",
+    "pre_sunrise_net_need_kwh",
+    "pre_sunrise_guard_need_kwh",
     "pre_sunrise_house_demand_kwh",
     "pre_sunrise_solar_kwh",
+    "pre_sunrise_credited_solar_kwh",
+    "pre_sunrise_solar_credit_factor",
+    "no_useful_solar_forecast",
+    "low_solar_day_credit_factor",
+    "solar_credit_mode",
+    "solar_unavailable_override",
+    "solar_override_status",
     "pre_sunrise_solar_start_at",
     "useful_solar_start_at",
     "solar_break_even_at",

@@ -1,4 +1,4 @@
-"""Switch platform - EMS master enable/disable."""
+"""Switch platform for local helper switches."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, REG_CONTROL_TIME1, REG_EMS_ENABLE, SLOT_DISABLED
@@ -23,7 +24,56 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: AeccBatteryCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities([AeccEmsSwitch(coordinator, config_entry)])
+    async_add_entities([AeccSolarUnavailableSwitch(coordinator, config_entry)])
+
+
+class AeccSolarUnavailableSwitch(CoordinatorEntity[AeccBatteryCoordinator], SwitchEntity, RestoreEntity):
+    """Treat forecast solar as unavailable for the smart overnight target."""
+
+    _attr_icon = "mdi:solar-power-off"
+    _attr_has_entity_name = True
+    _attr_name = "Solar Unavailable"
+
+    def __init__(
+        self,
+        coordinator: AeccBatteryCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_solar_unavailable"
+        self._is_on = False
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            self._is_on = last_state.state == "on"
+            self.coordinator.solar_unavailable_override = self._is_on
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def is_on(self) -> bool:
+        return self._is_on
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    async def async_turn_on(self, **kwargs) -> None:
+        self._is_on = True
+        self.coordinator.solar_unavailable_override = True
+        self.async_write_ha_state()
+        self.coordinator.async_set_updated_data(self.coordinator.data or {})
+
+    async def async_turn_off(self, **kwargs) -> None:
+        self._is_on = False
+        self.coordinator.solar_unavailable_override = False
+        self.async_write_ha_state()
+        self.coordinator.async_set_updated_data(self.coordinator.data or {})
 
 
 class AeccEmsSwitch(CoordinatorEntity[AeccBatteryCoordinator], SwitchEntity):

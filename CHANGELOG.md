@@ -1,11 +1,14 @@
 # Changelog
 
-## 1.4.23
+## 1.5.0
 
 - Added Recommended Overnight SOC target breakdown attributes for dashboards.
 - Added Solcast/data-history freshness checks and a safer stale-data minimum target.
 - Added forecast confidence adjustments for uncertain or very low solar forecasts.
 - Changed Pre-Sunrise Need to run until sustained forecast solar should cover house demand when timed Solcast data is available.
+- Added a conservative pre-useful-solar guard so weak early forecast solar only gets partial credit before it affects the SOC target.
+- Added a low-solar-day credit so forecast solar can reduce the battery-size-aware SOC target even if it never fully covers house load.
+- Added a Solar Unavailable integration switch that treats forecast solar as 0 kWh and reports Batteries Only.
 - Made the options helper checklist labels render directly in the form if Home Assistant translation caching falls back to raw keys.
 
 ## 1.4.22
