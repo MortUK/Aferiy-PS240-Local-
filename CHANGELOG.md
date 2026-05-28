@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.2
+
+- Changed the PS240 Self-Gen restore path to the tested schedule-3 pattern with AI smart discharge enabled and AI smart charge disabled.
+- Improved smart overnight charging so strong solar days credit more of the early pre-useful-solar ramp, reducing overcharging on clear summer mornings.
+- Added regression tests to protect the PS240 Self-Gen register pattern and diagnostics redaction.
+- Updated the GitHub lint workflow to run the regression tests.
+
 ## 1.5.1
 
 - Extended the smart overnight demand-history lookback from 7 to 14 days.

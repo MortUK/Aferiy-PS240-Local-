@@ -14,4 +14,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check Python syntax
-        run: python -m compileall custom_components/aecc_battery
+        run: python -m compileall custom_components/aecc_battery tests
+      - name: Install test dependencies
+        run: python -m pip install -r requirements_test.txt
+      - name: Run regression tests
+        run: python -m pytest tests

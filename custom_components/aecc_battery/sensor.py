@@ -175,6 +175,10 @@ _OVERNIGHT_USEFUL_SOLAR_CONSECUTIVE_PERIODS = 2
 _OVERNIGHT_USEFUL_SOLAR_MARGIN_W = 75.0
 _OVERNIGHT_USEFUL_SOLAR_DEMAND_FACTOR = 1.1
 _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR = 0.25
+_OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.50
+_OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.70
+_OVERNIGHT_BALANCED_SOLAR_RATIO = 1.0
+_OVERNIGHT_STRONG_SOLAR_RATIO = 1.2
 _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR = 0.7
 _OCCUPIED_DAILY_DEMAND_FLOOR_KWH = 9.0
 _EMPTY_HOUSE_DAILY_DEMAND_FLOOR_KWH = 3.0
@@ -3273,11 +3277,19 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             current = segment_end
 
         no_useful_solar_forecast = useful_solar_start_at is None
-        pre_sunrise_solar_credit_factor = (
-            _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR
-            if no_useful_solar_forecast
-            else _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR
-        )
+        solar_to_demand_ratio = solar_kwh / demand_kwh if demand_kwh > 0 else 0.0
+        if no_useful_solar_forecast:
+            pre_sunrise_solar_credit_factor = _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR
+            solar_credit_mode = "low_solar_day_partial_forecast_credit"
+        elif solar_to_demand_ratio >= _OVERNIGHT_STRONG_SOLAR_RATIO:
+            pre_sunrise_solar_credit_factor = _OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR
+            solar_credit_mode = "strong_solar_pre_useful_ramp_credit"
+        elif solar_to_demand_ratio >= _OVERNIGHT_BALANCED_SOLAR_RATIO:
+            pre_sunrise_solar_credit_factor = _OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR
+            solar_credit_mode = "balanced_solar_pre_useful_ramp_credit"
+        else:
+            pre_sunrise_solar_credit_factor = _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR
+            solar_credit_mode = "pre_useful_solar_ramp_partial_credit"
         pre_sunrise_credited_solar_kwh = pre_sunrise_solar_kwh * pre_sunrise_solar_credit_factor
         pre_sunrise_guard_need_kwh = max(
             0.0,
@@ -3288,11 +3300,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "no_sustained_useful_solar_forecast_with_partial_day_solar_credit"
             if no_useful_solar_forecast
             else "until_sustained_forecast_solar_exceeds_house_demand_with_partial_early_solar_credit"
-        )
-        solar_credit_mode = (
-            "low_solar_day_partial_forecast_credit"
-            if no_useful_solar_forecast
-            else "pre_useful_solar_ramp_partial_credit"
         )
 
         return {
@@ -3316,6 +3323,11 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "pre_sunrise_solar_credit_factor": pre_sunrise_solar_credit_factor,
             "no_useful_solar_forecast": no_useful_solar_forecast,
             "low_solar_day_credit_factor": _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR,
+            "balanced_solar_day_credit_factor": _OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR,
+            "strong_solar_day_credit_factor": _OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR,
+            "solar_to_demand_ratio": round(solar_to_demand_ratio, 2),
+            "balanced_solar_ratio": _OVERNIGHT_BALANCED_SOLAR_RATIO,
+            "strong_solar_ratio": _OVERNIGHT_STRONG_SOLAR_RATIO,
             "solar_credit_mode": solar_credit_mode,
             "pre_sunrise_solar_start_at": (
                 first_solar_start_at.isoformat() if first_solar_start_at else None

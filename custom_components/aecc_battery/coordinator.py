@@ -614,8 +614,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         schedule mode active, so the unit can appear to be in Self-Consumption
         while remaining effectively idle/manual.
 
-        This sequence first clears the manual time slot, then exits custom
-        schedule mode and re-enables AI/EMS.
+        This sequence first clears the manual time slot, then applies the
+        upstream-confirmed schedule mode 3 AI resume pattern while keeping
+        EMS enabled.
         """
         clear_manual_payload = {
             REG_CONTROL_TIME1: SLOT_DISABLED,
@@ -624,7 +625,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         restore_ai_payload = {
             REG_EMS_ENABLE: "1",
-            REG_SCHEDULE_MODE: "0",
+            REG_SCHEDULE_MODE: "3",
             REG_AI_SMART_CHARGE: "0",
             REG_AI_SMART_DISC: "1",
             REG_CUSTOM_MODE: "0",
@@ -632,7 +633,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
         _LOGGER.info(
-            "SET robust self-consumption: clear manual slot then restore AI/EMS"
+            "SET schedule-3 self-consumption: clear manual slot then restore AI/EMS"
         )
 
         for attempt in range(1, 4):
