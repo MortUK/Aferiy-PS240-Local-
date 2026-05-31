@@ -185,6 +185,7 @@ class AeccBatteryCapacity(CoordinatorEntity[AeccBatteryCoordinator], NumberEntit
     _attr_name = "Battery Capacity"
     _attr_icon = "mdi:battery-high"
     _attr_entity_category = EntityCategory.CONFIG
+    _attr_entity_registry_enabled_default = False
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_native_min_value = 1
     _attr_native_max_value = 30

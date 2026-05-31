@@ -95,6 +95,10 @@ _DIAGNOSTIC_SENSOR_KEYS = {
     "local_unit_battery_soc",
 }
 
+_DISABLED_BY_DEFAULT_SENSOR_KEYS = {
+    "local_unit_battery_soc",
+}
+
 # ── Energy counter definitions ────────────────────────────────────────────────
 # (key, name, power_keys, icon)
 _ENERGY_SENSORS = [
@@ -305,6 +309,22 @@ async def async_setup_entry(
     for key, name, canonical_key, unit, icon, is_power in _SENSORS:
         entities.append(AeccSensor(coordinator, config_entry, key, name, canonical_key, unit, icon, is_power))
 
+    for index, entry in enumerate(coordinator.storage_entries):
+        unit_number = index + 1
+        if entry.get("BatterySoc") is not None:
+            entities.append(
+                AeccStorageEntrySensor(
+                    coordinator,
+                    config_entry,
+                    index,
+                    f"battery_{unit_number}_soc",
+                    f"Battery {unit_number} SOC",
+                    "BatterySoc",
+                    PERCENTAGE,
+                    "mdi:battery-medium",
+                    SensorDeviceClass.BATTERY,
+                )
+            )
     for key, name, power_keys, icon in _ENERGY_SENSORS:
         entities.append(AeccEnergySensor(coordinator, config_entry, key, name, power_keys, icon))
 
@@ -318,8 +338,9 @@ async def async_setup_entry(
     entities.append(AeccGridMeterAgreementSensor(coordinator, config_entry))
     entities.append(AeccChargingReasonSensor(coordinator, config_entry))
 
+    entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
+
     if config_entry.options.get(CONF_ADVANCED_ENERGY_SENSORS, False):
-        entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
         entities.append(AeccRuntimeAtCurrentHouseDemandSensor(coordinator, config_entry))
         entities.append(AeccRecommendedOvernightSocSensor(coordinator, config_entry))
 
@@ -357,6 +378,8 @@ class AeccSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
             self._attr_device_class = SensorDeviceClass.BATTERY
         if key in _DIAGNOSTIC_SENSOR_KEYS:
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        if key in _DISABLED_BY_DEFAULT_SENSOR_KEYS:
+            self._attr_entity_registry_enabled_default = False
         self._last_value = None
 
     @property
@@ -433,6 +456,61 @@ class AeccSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
             return True
         hold_seconds = float(self.coordinator.brand_profile.get("hold_last_value_seconds", 120))
         return (time.time() - last_accepted_at) <= hold_seconds
+
+
+class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: AeccBatteryCoordinator,
+        config_entry: ConfigEntry,
+        index: int,
+        key: str,
+        name: str,
+        field: str,
+        unit: str | None,
+        icon: str,
+        device_class: SensorDeviceClass,
+    ) -> None:
+        super().__init__(coordinator)
+        self._index = index
+        self._field = field
+        self._attr_unique_id = f"{config_entry.entry_id}_{key}"
+        self._attr_name = name
+        self._attr_native_unit_of_measurement = unit
+        self._attr_icon = icon
+        self._attr_device_class = device_class
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def available(self) -> bool:
+        return (
+            super().available
+            and self.coordinator.storage_entry_val(self._index, self._field) is not None
+        )
+
+    @property
+    def native_value(self):
+        val = self.coordinator.storage_entry_val(self._index, self._field)
+        if val is None:
+            return None
+        try:
+            return round(float(val), 1)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "source": f"Storage_list[{self._index}]",
+            "source_field": self._field,
+            "available_unit_count": len(self.coordinator.storage_entries),
+        }
 
 
 class AeccEnergySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreEntity, SensorEntity):
@@ -757,7 +835,7 @@ class AeccChargingReasonSensor(CoordinatorEntity[AeccBatteryCoordinator], Sensor
         free_session = self.hass.states.is_state(_OCTOPUS_FREE_SESSION_ENTITY, "on")
         off_peak = self.hass.states.is_state(_OCTOPUS_OFF_PEAK_ENTITY, "on")
         overnight_enabled = self.hass.states.is_state(_OVERNIGHT_SMART_CHARGE_ENTITY, "on")
-        battery_soc = _state_float(self.hass, "sensor.aecc_battery_battery_soc")
+        battery_soc = _state_float(self.hass, "sensor.aecc_battery_system_average_battery_soc")
         charge_limit = _state_float(self.hass, "number.aecc_battery_charge_limit")
 
         if free_session:

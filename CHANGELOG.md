@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.3
+
+- Added dynamic per-battery SOC sensors based on the units reported by local TCP, avoiding unused fixed Array sensors.
+- Kept System Average Battery SOC as the main multi-unit SOC source for estimates and overnight automation logic.
+- Made House Demand available without enabling advanced energy estimate sensors.
+- Hid the manual Battery Capacity number by default because the capacity preset is the preferred control.
+- Removed unreliable per-battery PV/output sensors after local testing showed they do not provide useful per-unit values.
+- Updated the Home Assistant device manufacturer display to Richard Owen to avoid implying manufacturer support.
+
 ## 1.5.2
 
 - Changed the PS240 Self-Gen restore path to the tested schedule-3 pattern with AI smart discharge enabled and AI smart charge disabled.

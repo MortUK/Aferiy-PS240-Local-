@@ -49,8 +49,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _FIELD_MAP: dict[str, list[tuple[str, str, float]]] = {
     "battery_soc": [
-        ("storage", "BatterySoc", 1.0),
         ("summary", "AverageBatteryAverageSOC", 1.0),
+        ("storage", "BatterySoc", 1.0),
     ],
     "average_battery_soc": [
         ("summary", "AverageBatteryAverageSOC", 1.0),
@@ -260,17 +260,24 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return DeviceInfo(
             identifiers={(DOMAIN, identifier)},
             name=self.device_name,
-            manufacturer=self._manufacturer,
+            manufacturer="Richard Owen",
             model=self._model or None,
             sw_version=self.firmware_version,
-            configuration_url="https://github.com/StekkerDeal/aecc-battery-local",
+            configuration_url="https://github.com/MortUK/Aferiy-PS240-Local-",
         )
 
     @property
     def storage(self) -> dict[str, Any]:
         if not self.data:
             return {}
-        return (self.data.get("Storage_list") or [{}])[0]
+        return self.storage_entries[0] if self.storage_entries else {}
+
+    @property
+    def storage_entries(self) -> list[dict[str, Any]]:
+        if not self.data:
+            return []
+        entries = self.data.get("Storage_list") or []
+        return [entry for entry in entries if isinstance(entry, dict)]
 
     @property
     def summary(self) -> dict[str, Any]:
@@ -291,6 +298,21 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def storage_val(self, key: str, default: Any = None) -> Any:
         val = self.storage.get(key, default)
+        if val is None:
+            return default
+        if key in self._STORAGE_POWER_KEYS:
+            try:
+                return round(float(val) / 10, 1)
+            except (TypeError, ValueError):
+                return val
+        return val
+
+    def storage_entry_val(self, index: int, key: str, default: Any = None) -> Any:
+        try:
+            entry = self.storage_entries[index]
+        except IndexError:
+            return default
+        val = entry.get(key, default)
         if val is None:
             return default
         if key in self._STORAGE_POWER_KEYS:

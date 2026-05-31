@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
 from .const import (
@@ -78,6 +79,36 @@ POWER_FLOW_ENTITY_IDS = (
     "sensor.aferiy_zero_feed_in",
     "sensor.aferiy_generation_self_consumption",
     "switch.aecc_battery_solar_unavailable",
+)
+
+POWER_FLOW_DYNAMIC_SENSOR_SUFFIXES = (
+    "_battery_1_soc",
+    "_battery_2_soc",
+    "_battery_3_soc",
+    "_battery_4_soc",
+    "_battery_5_soc",
+    "_battery_6_soc",
+    "_battery_7_soc",
+    "_battery_8_soc",
+    "_battery_9_soc",
+    "_battery_10_soc",
+    "_battery_11_soc",
+    "_battery_12_soc",
+    "_battery_13_soc",
+    "_battery_14_soc",
+    "_battery_15_soc",
+)
+
+OLD_ARRAY_SOC_UNIQUE_SUFFIXES = (
+    "array_1_battery_soc",
+    "array_2_battery_soc",
+    "array_3_battery_soc",
+)
+
+OLD_PER_BATTERY_POWER_UNIQUE_SUFFIXES = tuple(
+    f"battery_{index}_{suffix}"
+    for index in range(1, 16)
+    for suffix in ("output_power", "pv_power")
 )
 
 POWER_FLOW_ATTRIBUTE_KEYS = (
@@ -201,12 +232,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_probe_device_management()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    _async_remove_old_per_battery_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _async_register_services(hass)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     _LOGGER.info("AECC Battery '%s' (%s) set up at %s:%s", name, manufacturer, host, port)
     return True
+
+
+def _async_remove_old_per_battery_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove old per-battery entities replaced or withdrawn after testing."""
+    registry = er.async_get(hass)
+    for suffix in (*OLD_ARRAY_SOC_UNIQUE_SUFFIXES, *OLD_PER_BATTERY_POWER_UNIQUE_SUFFIXES):
+        entity_id = registry.async_get_entity_id(
+            Platform.SENSOR,
+            DOMAIN,
+            f"{entry.entry_id}_{suffix}",
+        )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -346,8 +391,16 @@ def _async_register_services(hass: HomeAssistant) -> None:
         captured_at = datetime.now(UTC).isoformat()
         entities: dict[str, dict[str, Any]] = {}
         missing_entities: list[str] = []
+        entity_ids = list(POWER_FLOW_ENTITY_IDS)
+        for state in hass.states.async_all("sensor"):
+            if state.entity_id in entity_ids:
+                continue
+            if state.entity_id.startswith("sensor.aecc_battery") and state.entity_id.endswith(
+                POWER_FLOW_DYNAMIC_SENSOR_SUFFIXES
+            ):
+                entity_ids.append(state.entity_id)
 
-        for entity_id in POWER_FLOW_ENTITY_IDS:
+        for entity_id in entity_ids:
             state = hass.states.get(entity_id)
             if state is None:
                 missing_entities.append(entity_id)
