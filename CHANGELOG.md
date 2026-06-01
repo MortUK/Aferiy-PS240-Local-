@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.4
+
+- Added Home Assistant zeroconf/mDNS discovery for local AECC/SXD devices.
+- Added a Master Device selector during setup and reconfiguration while keeping manual IP entry available.
+- De-duplicated discovered devices by IP/port and prefers serial-number labels when available.
+- Clearly warns multi-unit users to add only the master/coordinator, not executor units.
+- Optimised setup discovery with shorter scans, parallel mDNS fallback, and a short cache so settings load faster.
+
 ## 1.5.3
 
 - Added dynamic per-battery SOC sensors based on the units reported by local TCP, avoiding unused fixed Array sensors.

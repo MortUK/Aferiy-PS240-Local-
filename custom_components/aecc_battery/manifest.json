@@ -14,5 +14,11 @@
   "issue_tracker": "https://github.com/MortUK/Aferiy-PS240-Local-/issues",
   "quality_scale": "bronze",
   "requirements": [],
-  "version": "1.5.3"
+  "version": "1.5.4",
+  "zeroconf": [
+    {
+      "type": "_http._tcp.local.",
+      "name": "SXD-mDNS-IF-*"
+    }
+  ]
 }

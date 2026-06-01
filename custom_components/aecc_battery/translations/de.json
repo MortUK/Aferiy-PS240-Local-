@@ -3,15 +3,31 @@
     "step": {
       "user": {
         "title": "AFERIY PS240 (Local) verbinden",
-        "description": "Geben Sie die Netzwerkdaten Ihrer AFERIY PS240 Batterie ein. Die Batterie muss unter der angegebenen IP-Adresse erreichbar sein.",
+        "description": "Choose a discovered AECC/SXD device only if you have confirmed it is the master/coordinator, or enter the master's static IP manually. Executor units should not be added separately.",
+        "data": {
+          "master_device": "Master Device",
+          "host": "IP-Adresse",
+          "port": "TCP-Port",
+          "name": "Gerätename"
+        },
+        "data_description": {
+          "master_device": "Choose the master/coordinator, or leave as manual and enter the IP below.",
+          "host": "Static local IP of your master/coordinator battery (e.g. 192.168.0.100)",
+          "port": "TCP-Port der Batterie (normalerweise 8080)",
+          "name": "Anzeigename in Home Assistant"
+        }
+      },
+      "zeroconf_confirm": {
+        "title": "Discovered AFERIY PS240 (Local)",
+        "description": "Home Assistant found a local AECC/SXD device at {discovered_host} ({discovered_serial}). Multi-unit systems may advertise the master and executor units separately. Configure only the master/coordinator unit. If this discovered device is not the master, replace the IP address with the master's static IP before continuing.",
         "data": {
           "host": "IP-Adresse",
           "port": "TCP-Port",
           "name": "Gerätename"
         },
         "data_description": {
-          "host": "Feste lokale IP-Adresse Ihrer Batterie (z.B. 192.168.0.100)",
-          "port": "TCP-Port der Batterie (normalerweise 8080)",
+          "host": "Use the master/coordinator battery IP only. Executors should not be added separately.",
+          "port": "TCP port from the device advert, typically 8080",
           "name": "Anzeigename in Home Assistant"
         }
       }
@@ -33,6 +49,7 @@
           "host": "IP-Adresse",
           "port": "TCP-Port",
           "name": "Gerätename",
+          "master_device": "Master Device",
           "advanced_energy_sensors": "Erweiterte Energie-Schätzsensoren",
           "poll_interval": "Abfrageintervall",
           "tariff_preset": "Niedertarif-Voreinstellung",
@@ -47,6 +64,7 @@
           "tariff_preset": "Defaults to Octopus Intelligent Go. Named presets store their listed times automatically; choose custom to edit the times manually.",
           "off_peak_start": "Start of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
           "off_peak_end": "End of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
+          "master_device": "Choose the master/coordinator, or leave as manual and enter the IP below. Executor units should not be selected.",
           "dependency_solcast_confirmed": "Tick once Solcast PV Forecast is installed. Used for timed solar forecasts and solar-aware estimates.",
           "dependency_home_occupancy_confirmed": "Tick once home occupancy is enabled. Uses Home Assistant's zone.home occupancy count so empty-house periods do not train the normal demand profile."
         }
