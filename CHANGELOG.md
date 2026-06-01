@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.5
+
+- Fixed Hassfest validation for zeroconf discovery by using the required lowercase manifest matcher.
+- Made zeroconf service-name handling case-insensitive.
+
 ## 1.5.4
 
 - Added Home Assistant zeroconf/mDNS discovery for local AECC/SXD devices.

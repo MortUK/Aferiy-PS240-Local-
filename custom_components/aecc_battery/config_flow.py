@@ -368,7 +368,7 @@ def _clean_discovery_label(label: str, host: str, port: int) -> str:
 def _is_aecc_zeroconf_device(discovery_info: Any) -> bool:
     """Return true for the SXD HTTP adverts used by AECC/Aferiy devices."""
     service_name = discovery_info.name or ""
-    if not service_name.startswith(_AECC_ZEROCONF_SERVICE_PREFIX):
+    if not service_name.lower().startswith(_AECC_ZEROCONF_SERVICE_PREFIX.lower()):
         return False
 
     device_type = _zeroconf_property(discovery_info, "s_type")
