@@ -1,11 +1,11 @@
 # AFERIY PS240 (Local)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.5.5-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.5.6-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 
-Home Assistant custom integration for local TCP monitoring and control of an AFERIY PS240 battery.
+Home Assistant custom integration for local TCP monitoring and control of an AFERIY PS240.
 
 This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It keeps the original `aecc_battery` integration domain so existing entities, dashboards, and automations do not need to be renamed.
 
@@ -14,6 +14,7 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Local TCP connection to the battery, usually on port `8080`
 - Battery state of charge, power, PV, charge, discharge, and diagnostic sensors
 - Manual charge, discharge, idle, and self-consumption controls
+- Local-first overnight charging support through Home Assistant automations
 - Charge and discharge SOC limits
 - Charge/discharge power targets from 800 W to 1200 W for cautious PS240 testing
 - Physics-aware filtering for occasional invalid SOC/power readings
@@ -88,6 +89,12 @@ The optional Recommended Overnight SOC sensor helps users with cheap overnight e
 - Applies a safer minimum SOC if Solcast or demand history is stale or missing.
 - Exposes a plain-English target breakdown so dashboards can show why the target was chosen.
 
+Home Assistant should perform the actual overnight timing. Local schedule-slot
+registers mirrored from the AEC Cloud app were tested and behaved as immediate
+commands on the PS240, so they are not exposed as normal controls. The safer
+local pattern is: start Charge at the off-peak start time, watch System Average
+Battery SOC, then restore Self-Gen/Zero Export at the off-peak end time.
+
 ### Solar Clipping And Export
 
 The PS240 can clip or hold back surplus PV when the battery is full or when the system is running in zero-feed behaviour.
@@ -103,6 +110,7 @@ The PS240 has been observed to accept 800 W reliably over local TCP. The integra
 ## Documentation
 
 - [Entities](docs/entities.md)
+- [AEC Cloud App Findings](docs/cloud-app-findings.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Changelog](CHANGELOG.md)
 

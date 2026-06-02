@@ -7,12 +7,18 @@ Core entities focus on data and controls that come directly from the local batte
 - Battery SOC
 - PV, AC charge, battery charge, battery discharge, grid, backup, and battery power
 - Energy charged, discharged, and generated
-- Operating Mode
+- Local Operating Mode
 - Charge Power Target and Discharge Power Target
 - Charge Limit and Discharge Limit
 - Battery Capacity and Battery Capacity Preset
 - Battery Status
 - Connection Status
+
+`Local Operating Mode` is the last mode commanded through this local
+integration. If the AEC Cloud app changes the system, the selector may not
+reflect that external action. Use Battery Status, power sensors, Last Command
+Result, and control-register snapshots when comparing local behaviour with app
+or cloud-originated changes.
 
 ## Diagnostic Entities
 
@@ -57,6 +63,21 @@ Pre-Sunrise Need is the estimated energy needed after the cheap-rate window ends
 Useful attributes include `target_breakdown_summary`, `recommendation_reason`, `pre_sunrise_need_kwh`, `pre_sunrise_net_need_kwh`, `pre_sunrise_credited_solar_kwh`, `no_useful_solar_forecast`, `solar_credit_mode`, `solar_unavailable_override`, `solar_override_status`, `solar_break_even_at`, `recorder_history_weighting`, `recorder_history_daily_averages`, `forecast_confidence`, `stale_data_guard_active`, `dynamic_buffer_soc`, `battery_loss_allowance_kwh`, `estimated_grid_charge_energy_to_target_kwh`, and `target_jump_guard`.
 
 For best results, enable the advanced estimate sensors, configure the battery capacity correctly, keep Home Assistant recorder history available, and provide Solcast forecast sensors. Without enough data the sensor may use conservative defaults or show that it cannot calculate a reliable target.
+
+## Local Overnight Scheduling
+
+AFERIY/AEC Cloud app schedule captures showed a cloud-side schedule object, but
+direct local writes of the mirrored schedule-slot registers behaved as immediate
+commands on the PS240. The recommended local approach is therefore to let Home
+Assistant do the timing and use the integration only as the local actuator:
+
+- Start local Charge at the configured off-peak start time.
+- Use System Average Battery SOC as the target feedback.
+- Idle or hold when the target is reached.
+- Restore Self-Gen/Zero Export at the off-peak end time.
+
+This avoids relying on the cloud scheduler and keeps the local integration's
+control path predictable.
 
 ## External Helpers
 

@@ -31,6 +31,7 @@ from .const import (
     REG_AI_SMART_CHARGE,
     REG_AI_SMART_DISC,
     REG_CONTROL_TIME1,
+    REG_CONTROL_TIME2,
     REG_CUSTOM_MODE,
     REG_EMS_ENABLE,
     REG_MAX_FEED_POWER,
@@ -94,6 +95,7 @@ _REGISTER_RANGE_FALLBACK = list(range(3000, 3040))
 _KEY_REGISTER_LABELS: dict[str, str] = {
     REG_EMS_ENABLE: "EMS enable (3000)",
     REG_CONTROL_TIME1: "Control time slot 1 (3003)",
+    REG_CONTROL_TIME2: "Control time slot 2 (3004)",
     REG_SCHEDULE_MODE: "Schedule mode (3020)",
     REG_AI_SMART_CHARGE: "AI smart charge (3021)",
     REG_AI_SMART_DISC: "AI smart discharge (3022)",

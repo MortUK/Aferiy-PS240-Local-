@@ -102,7 +102,7 @@ _DISABLED_BY_DEFAULT_SENSOR_KEYS = {
 # ── Energy counter definitions ────────────────────────────────────────────────
 # (key, name, power_keys, icon)
 _ENERGY_SENSORS = [
-    ("energy_charged", "Energy Charged", ["ac_charging_power", "pv_charging_power"], "mdi:battery-charging"),
+    ("energy_charged", "Energy Charged", ["total_charge_power"], "mdi:battery-charging"),
     (
         "energy_discharged",
         "Energy Discharged",
@@ -458,7 +458,7 @@ class AeccSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
         return (time.time() - last_accepted_at) <= hold_seconds
 
 
-class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -477,6 +477,8 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEn
         super().__init__(coordinator)
         self._index = index
         self._field = field
+        self._last_value: float | None = None
+        self._last_accepted_at: float | None = None
         self._attr_unique_id = f"{config_entry.entry_id}_{key}"
         self._attr_name = name
         self._attr_native_unit_of_measurement = unit
@@ -487,15 +489,34 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEn
     def device_info(self) -> DeviceInfo:
         return self.coordinator.device_info
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state not in ("unknown", "unavailable"):
+            try:
+                value = round(float(last_state.state), 1)
+            except (TypeError, ValueError):
+                return
+            if 0 <= value <= 100:
+                self._last_value = value
+                self._last_accepted_at = time.time() - 60
+
     @property
     def available(self) -> bool:
-        return (
-            super().available
-            and self.coordinator.storage_entry_val(self._index, self._field) is not None
-        )
+        if self._raw_value() is not None:
+            return super().available
+        return self._last_value is not None and self._within_hold_window()
 
     @property
     def native_value(self):
+        val = self._clean_value(self._raw_value())
+        if val is None:
+            return self._last_value if self._within_hold_window() else None
+        self._last_value = val
+        self._last_accepted_at = time.time()
+        return val
+
+    def _raw_value(self) -> float | None:
         val = self.coordinator.storage_entry_val(self._index, self._field)
         if val is None:
             return None
@@ -504,12 +525,42 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEn
         except (TypeError, ValueError):
             return None
 
+    def _clean_value(self, raw: float | None) -> float | None:
+        if raw is None or not 0 <= raw <= 100:
+            return None
+
+        profile = self.coordinator.brand_profile
+        threshold_w = float(profile.get("soc_zero_reject_during_active_w", 100))
+        wall_power_w = self.coordinator._wall_power_signal_w()
+        if raw == 0 and wall_power_w is not None and abs(wall_power_w) > threshold_w:
+            return None
+
+        if self._last_value is not None and self._last_accepted_at is not None:
+            now = time.time()
+            elapsed_seconds = now - self._last_accepted_at
+            if elapsed_seconds >= 1.0:
+                elapsed_min = elapsed_seconds / 60.0
+                max_rate = float(profile.get("soc_max_rate_pct_per_min", 8.0))
+                change_per_min = abs(raw - self._last_value) / elapsed_min
+                if change_per_min > max_rate:
+                    return None
+
+        return raw
+
+    def _within_hold_window(self) -> bool:
+        if self._last_accepted_at is None:
+            return False
+        hold_seconds = float(self.coordinator.brand_profile.get("hold_last_value_seconds", 120))
+        return (time.time() - self._last_accepted_at) <= hold_seconds
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
             "source": f"Storage_list[{self._index}]",
             "source_field": self._field,
             "available_unit_count": len(self.coordinator.storage_entries),
+            "raw_value": self._raw_value(),
+            "last_accepted_value": self._last_value,
         }
 
 
@@ -540,6 +591,8 @@ class AeccEnergySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreEntity,
         self._attr_icon = icon
         self._accumulated_kwh: float = 0.0
         self._last_update_time: datetime | None = None
+        self._last_raw_power_w: float | None = None
+        self._last_integrated_power_w: float | None = None
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -579,6 +632,13 @@ class AeccEnergySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreEntity,
         if self._key == "energy_discharged" and valid_values:
             total_power_w = max(valid_values)
 
+        self._last_raw_power_w = total_power_w if any_valid else None
+        if any_valid:
+            total_power_w = max(0.0, total_power_w)
+            self._last_integrated_power_w = total_power_w
+        else:
+            self._last_integrated_power_w = None
+
         if any_valid and self._last_update_time is not None:
             delta_seconds = (now - self._last_update_time).total_seconds()
             if 0 < delta_seconds <= _MAX_GAP_SECONDS:
@@ -589,6 +649,14 @@ class AeccEnergySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreEntity,
             self._last_update_time = now
 
         self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "source_power_keys": self._power_keys,
+            "raw_source_power_w": self._last_raw_power_w,
+            "integrated_power_w": self._last_integrated_power_w,
+        }
 
 
 class AeccGridExportSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):

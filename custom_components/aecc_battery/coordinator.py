@@ -59,8 +59,8 @@ _FIELD_MAP: dict[str, list[tuple[str, str, float]]] = {
         ("storage", "BatterySoc", 1.0),
     ],
     "ac_charging_power": [
-        ("storage", "AcChargingPower", 0.1),
         ("summary", "TotalACChargePower", 1.0),
+        ("storage", "AcChargingPower", 0.1),
     ],
     "total_charge_power": [
         ("summary", "TotalChargePower", 1.0),

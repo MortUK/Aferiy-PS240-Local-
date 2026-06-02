@@ -140,6 +140,7 @@ REG_CUSTOM_MODE = "3030"  # 0 = off, 1 = on
 #        "1,00:00,23:59,-800,0,6,0,0,0,100,10"    (charge at 800 W)
 #        "0,00:00,00:00,0,0,0,0,0,0,100,10"       (idle / disabled)
 REG_CONTROL_TIME1 = "3003"  # First active time slot
+REG_CONTROL_TIME2 = "3004"  # Second active time slot
 
 REG_MIN_SOC = "3023"  # Minimum discharge SOC
 REG_MAX_SOC = "3024"  # Maximum charge SOC

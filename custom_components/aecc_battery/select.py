@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -71,7 +72,7 @@ def _closest_capacity_preset(capacity_kwh: float) -> str:
 
 
 class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectEntity):
-    """Single clean operating mode selector.
+    """Single clean local command mode selector.
 
     Self-Gen/Zero Export -> robust/safe self-consumption reset
     Idle             -> manual/custom idle
@@ -81,7 +82,7 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
 
     _attr_icon = "mdi:battery-sync"
     _attr_has_entity_name = True
-    _attr_name = "Operating Mode"
+    _attr_name = "Local Operating Mode"
     _attr_options = OPERATING_MODE_OPTIONS
 
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
@@ -113,6 +114,19 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
     @property
     def available(self) -> bool:
         return self.coordinator.last_update_success
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        latest_write = self.coordinator.latest_write or {}
+        return {
+            "source": "local_commanded_state",
+            "note": (
+                "Cloud/app-originated changes may not update this selector; "
+                "use Battery Status and power sensors for observed behaviour."
+            ),
+            "last_local_command": latest_write.get("operation"),
+            "last_local_command_at": latest_write.get("timestamp"),
+        }
 
     async def async_select_option(self, option: str) -> None:
         _LOGGER.info("User selected operating mode: %s", option)

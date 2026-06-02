@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.6
+
+- Made AC Charging Power prefer the system-total cloud/local summary field before falling back to the local unit field.
+- Stabilised individual per-battery SOC sensors by holding the last valid reading through short bad-value bursts.
+- Changed Energy Charged to use Total Charge Power and prevent negative source power from reducing the total-increasing counter.
+- Renamed Operating Mode to Local Operating Mode and clarified that cloud/app-originated changes may not update the selector.
+- Added diagnostic labelling for control time slot 2 and documented AEC Cloud app schedule/export findings from Proxyman captures.
+- Documented the recommended local-first overnight charging approach using Home Assistant as the scheduler.
+
 ## 1.5.5
 
 - Fixed Hassfest validation for zeroconf discovery by using the required lowercase manifest matcher.
