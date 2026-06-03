@@ -29,7 +29,6 @@ from .const import (
     CONF_OFF_PEAK_START,
     CONF_TARIFF_PRESET,
     DEFAULT_BATTERY_CAPACITY_KWH,
-    DEFAULT_BATTERY_MODULE_COUNT,
     DEFAULT_OFF_PEAK_END,
     DEFAULT_OFF_PEAK_START,
     DEFAULT_TARIFF_PRESET,
@@ -175,20 +174,6 @@ _OCCUPIED_DAILY_DEMAND_FLOOR_KWH = 9.0
 _EMPTY_HOUSE_DAILY_DEMAND_FLOOR_KWH = 3.0
 
 
-def _configured_battery_module_count(coordinator: AeccBatteryCoordinator) -> int:
-    try:
-        module_count = int(
-            getattr(
-                coordinator,
-                "configured_battery_module_count",
-                DEFAULT_BATTERY_MODULE_COUNT,
-            )
-        )
-    except (TypeError, ValueError):
-        return DEFAULT_BATTERY_MODULE_COUNT
-    return max(1, module_count)
-
-
 def _parse_hhmm(value: Any, default: str) -> tuple[int, int, str]:
     text = str(value or default).strip()
     try:
@@ -310,8 +295,7 @@ async def async_setup_entry(
     for key, name, canonical_key, unit, icon, is_power in _SENSORS:
         entities.append(AeccSensor(coordinator, config_entry, key, name, canonical_key, unit, icon, is_power))
 
-    configured_module_count = _configured_battery_module_count(coordinator)
-    for index, entry in enumerate(coordinator.storage_entries[:configured_module_count]):
+    for index, entry in enumerate(coordinator.storage_entries):
         unit_number = index + 1
         if entry.get("BatterySoc") is not None:
             entities.append(
@@ -505,16 +489,12 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreE
 
     @property
     def available(self) -> bool:
-        if self._index >= _configured_battery_module_count(self.coordinator):
-            return False
         if self._raw_value() is not None:
             return super().available
         return self._last_value is not None and self._within_hold_window()
 
     @property
     def native_value(self):
-        if self._index >= _configured_battery_module_count(self.coordinator):
-            return None
         val = self._clean_value(self._raw_value())
         if val is None:
             return self._last_value if self._within_hold_window() else None
@@ -565,10 +545,6 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreE
             "source": f"Storage_list[{self._index}]",
             "source_field": self._field,
             "battery_index": self._index + 1,
-            "configured_module_count": _configured_battery_module_count(self.coordinator),
-            "visible_by_capacity_preset": (
-                self._index < _configured_battery_module_count(self.coordinator)
-            ),
             "available_unit_count": len(self.coordinator.storage_entries),
             "raw_value": self._raw_value(),
             "last_accepted_value": self._last_value,

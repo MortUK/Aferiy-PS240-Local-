@@ -15,6 +15,7 @@ from homeassistant.util import slugify
 
 from .const import (
     BRAND_PROFILES,
+    CONF_ADVANCED_ENERGY_SENSORS,
     CONF_EXTENDED_POWER,
     CONF_HOST,
     CONF_MANUFACTURER,
@@ -119,6 +120,8 @@ OLD_PER_BATTERY_POWER_UNIQUE_SUFFIXES = tuple(
     for index in range(1, 16)
     for suffix in ("output_power", "pv_power")
 )
+
+BATTERY_SOC_UNIQUE_SUFFIXES = tuple(f"battery_{index}_soc" for index in range(1, 16))
 
 POWER_FLOW_ATTRIBUTE_KEYS = (
     "friendly_name",
@@ -250,7 +253,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     _async_remove_old_per_battery_entities(hass, entry)
+    _async_remove_stale_battery_soc_entities(hass, entry, coordinator)
     _async_remove_withdrawn_config_entities(hass, entry)
+    _async_remove_disabled_advanced_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _async_register_services(hass)
 
@@ -263,6 +268,38 @@ def _async_remove_old_per_battery_entities(hass: HomeAssistant, entry: ConfigEnt
     """Remove old per-battery entities replaced or withdrawn after testing."""
     registry = er.async_get(hass)
     for suffix in (*OLD_ARRAY_SOC_UNIQUE_SUFFIXES, *OLD_PER_BATTERY_POWER_UNIQUE_SUFFIXES):
+        entity_id = registry.async_get_entity_id(
+            Platform.SENSOR,
+            DOMAIN,
+            f"{entry.entry_id}_{suffix}",
+        )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
+
+
+def _async_remove_stale_battery_soc_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: AeccBatteryCoordinator,
+) -> None:
+    """Remove Battery N SOC slots that the master no longer reports at setup."""
+    reported_slots = {
+        index + 1
+        for index, storage_entry in enumerate(coordinator.storage_entries)
+        if storage_entry.get("BatterySoc") is not None
+    }
+    if not reported_slots:
+        _LOGGER.warning(
+            "AECC Battery '%s' did not report any Storage_list BatterySoc entries; "
+            "keeping existing Battery N SOC entities",
+            coordinator.device_name,
+        )
+        return
+
+    registry = er.async_get(hass)
+    for slot_number, suffix in enumerate(BATTERY_SOC_UNIQUE_SUFFIXES, start=1):
+        if slot_number in reported_slots:
+            continue
         entity_id = registry.async_get_entity_id(
             Platform.SENSOR,
             DOMAIN,
@@ -286,6 +323,24 @@ def _async_remove_withdrawn_config_entities(hass: HomeAssistant, entry: ConfigEn
         entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
         if entity_id is not None:
             registry.async_remove(entity_id)
+
+
+def _async_remove_disabled_advanced_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Remove advanced configuration entities when advanced estimates are off."""
+    if entry.options.get(CONF_ADVANCED_ENERGY_SENSORS, False):
+        return
+
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        Platform.SELECT,
+        DOMAIN,
+        f"{entry.entry_id}_battery_capacity_preset",
+    )
+    if entity_id is not None:
+        registry.async_remove(entity_id)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -55,9 +55,9 @@ The master controls the slave units. You do not need a separate local integratio
 
 System-level readings are reported through the master. System Average Battery SOC is the main multi-unit SOC source and matches the behaviour shown in the AEC Cloud app.
 
-Set **Battery Capacity** to the total number of installed 1.958 kWh battery modules. The integration creates generic `Battery 1 SOC`, `Battery 2 SOC`, and similar entities when the master exposes matching local `Storage_list` entries. This avoids tying dashboards to a particular serial number when a unit is replaced.
+The integration creates generic `Battery 1 SOC`, `Battery 2 SOC`, and similar entities from the local `Storage_list` entries reported by the master. This avoids tying dashboards to a particular serial number when a unit is replaced.
 
-After reducing or increasing the installed module count, restart Home Assistant so the individual battery entity list is rebuilt. Changing the preset updates capacity calculations immediately, but removed battery slots may remain visible until a full restart.
+After adding, removing, or replacing a battery/inverter, restart Home Assistant or reload the integration so the individual battery entity list is rebuilt from the master. The Battery Capacity preset does not control battery identification.
 
 ## Options
 
@@ -69,9 +69,11 @@ Open the integration options to adjust:
 - Off-peak start and end times
 - External helper confirmations for advanced estimates
 
-The device Configuration section also provides Battery Capacity, Overnight Charge mode, Manual SOC, Off-Peak Tariff, Off-Peak Start/End, Solar Availability, Overnight Status, and Recommended Overnight SOC.
+The device Configuration section also provides Overnight Charge mode, Manual SOC, Off-Peak Tariff, Off-Peak Start/End, Solar Availability, Overnight Status, and Recommended Overnight SOC. Battery Capacity is available when Advanced Energy Estimate Sensors is enabled.
 
 The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
+
+Battery Capacity is an advanced estimate input selected in 1.958 kWh module steps. It is used by the charge and overnight energy calculations only. It does not limit the Battery N SOC sensors reported by the master.
 
 The off-peak window defaults to Octopus Intelligent Go, 23:30 to 05:30. Named presets are available for Snug Octopus, Octopus Go, Octopus Intelligent Go, E.ON Next Drive, British Gas Electric Driver, and British Gas Economy 7. If your tariff uses different cheap-rate hours, choose Custom and set the start and end times manually in 24-hour `HH:MM` format. These times are used by the overnight target and Pre-Sunrise Need calculations.
 

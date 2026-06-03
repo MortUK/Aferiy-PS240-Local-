@@ -19,7 +19,6 @@ from .cleaners import CLEANERS, CleanerContext
 from .const import (
     DEFAULT_BRAND_PROFILE,
     DEFAULT_BATTERY_CAPACITY_KWH,
-    DEFAULT_BATTERY_MODULE_COUNT,
     DEFAULT_OFF_PEAK_END,
     DEFAULT_OFF_PEAK_START,
     DEFAULT_TARIFF_PRESET,
@@ -160,7 +159,6 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.commanded_charge_power: int = 800
         self.commanded_discharge_power: int = 800
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
-        self.configured_battery_module_count: int = DEFAULT_BATTERY_MODULE_COUNT
         self.manual_overnight_target_soc: int = 80
         self.overnight_charging_mode: str = overnight_charging_mode
         self.off_peak_start: str = off_peak_start
@@ -669,8 +667,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
         else:
             self._set_overnight_status(
-                "Charge command failed",
-                "The battery did not confirm the local charge command.",
+                "Charge command not confirmed",
+                "The battery did not confirm the local charge command; retrying on the next update.",
                 {**base_attrs, "charge_power_w_per_unit": power},
             )
 

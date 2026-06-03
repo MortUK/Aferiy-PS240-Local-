@@ -7,9 +7,7 @@ from typing import Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -17,6 +15,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     BATTERY_CAPACITY_PRESET_MODULE_COUNTS,
+    CONF_ADVANCED_ENERGY_SENSORS,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_OFF_PEAK_END,
     DEFAULT_OFF_PEAK_START,
@@ -72,15 +71,15 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: AeccBatteryCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities(
-        [
-            AeccOperatingModeSelect(coordinator, config_entry),
-            AeccBatteryCapacityPresetSelect(coordinator, config_entry),
-            AeccAutomaticOvernightChargingSelect(coordinator, config_entry),
-            AeccSmartTariffPresetSelect(coordinator, config_entry),
-            AeccSolarAvailabilitySelect(coordinator, config_entry),
-        ]
-    )
+    entities: list[SelectEntity] = [
+        AeccOperatingModeSelect(coordinator, config_entry),
+        AeccAutomaticOvernightChargingSelect(coordinator, config_entry),
+        AeccSmartTariffPresetSelect(coordinator, config_entry),
+        AeccSolarAvailabilitySelect(coordinator, config_entry),
+    ]
+    if config_entry.options.get(CONF_ADVANCED_ENERGY_SENSORS, False):
+        entities.append(AeccBatteryCapacityPresetSelect(coordinator, config_entry))
+    async_add_entities(entities)
 
 
 def _clamp(value: int, minimum: int, maximum: int) -> int:
@@ -94,33 +93,6 @@ def _module_count_from_option(option: str) -> int | None:
         return int(module_text)
     except (AttributeError, IndexError, ValueError):
         return None
-
-
-def _set_configured_module_count(
-    coordinator: AeccBatteryCoordinator,
-    module_count: int,
-) -> None:
-    coordinator.configured_battery_module_count = module_count
-    coordinator.battery_capacity_kwh = battery_capacity_for_modules(module_count)
-
-
-def _remove_stale_battery_soc_entities(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    configured_module_count: int,
-) -> None:
-    """Remove generic battery slots above the configured module count."""
-    registry = er.async_get(hass)
-    for module_number in BATTERY_CAPACITY_PRESET_MODULE_COUNTS:
-        if module_number <= configured_module_count:
-            continue
-        entity_id = registry.async_get_entity_id(
-            Platform.SENSOR,
-            DOMAIN,
-            f"{config_entry.entry_id}_battery_{module_number}_soc",
-        )
-        if entity_id is not None:
-            registry.async_remove(entity_id)
 
 
 def _closest_capacity_preset(capacity_kwh: float) -> str:
@@ -271,9 +243,6 @@ class AeccBatteryCapacityPresetSelect(
         self._selected_option = _closest_capacity_preset(
             float(getattr(coordinator, "battery_capacity_kwh", DEFAULT_BATTERY_CAPACITY_KWH))
         )
-        module_count = _module_count_from_option(self._selected_option)
-        if module_count is not None:
-            _set_configured_module_count(coordinator, module_count)
 
     async def async_added_to_hass(self) -> None:
         """Restore the selected preset after restarts."""
@@ -284,25 +253,12 @@ class AeccBatteryCapacityPresetSelect(
             self._selected_option = _closest_capacity_preset(
                 float(getattr(self.coordinator, "battery_capacity_kwh", DEFAULT_BATTERY_CAPACITY_KWH))
             )
-            module_count = _module_count_from_option(self._selected_option)
-            if module_count is not None:
-                _set_configured_module_count(self.coordinator, module_count)
-                _remove_stale_battery_soc_entities(
-                    self.hass,
-                    self._config_entry,
-                    module_count,
-                )
             return
 
         self._selected_option = last_state.state
         module_count = _module_count_from_option(self._selected_option)
         if module_count is not None:
-            _set_configured_module_count(self.coordinator, module_count)
-            _remove_stale_battery_soc_entities(
-                self.hass,
-                self._config_entry,
-                module_count,
-            )
+            self.coordinator.battery_capacity_kwh = battery_capacity_for_modules(module_count)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -327,12 +283,7 @@ class AeccBatteryCapacityPresetSelect(
 
         capacity_kwh = battery_capacity_for_modules(module_count)
         self._selected_option = option
-        _set_configured_module_count(self.coordinator, module_count)
-        _remove_stale_battery_soc_entities(
-            self.hass,
-            self._config_entry,
-            module_count,
-        )
+        self.coordinator.battery_capacity_kwh = capacity_kwh
         _LOGGER.info(
             "Stored AECC battery capacity preset %s as %.3f kWh. No battery command sent.",
             option,

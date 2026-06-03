@@ -11,7 +11,6 @@ Core entities focus on data and controls that come directly from the local batte
 - Local Operating Mode
 - Charge Power Target and Discharge Power Target
 - Charge Limit and Discharge Limit
-- Battery Capacity
 - Overnight Charge, Manual SOC, Off-Peak Tariff, Off-Peak Start, and Off-Peak End
 - Solar Availability
 - Overnight Status and Recommended Overnight SOC
@@ -19,10 +18,9 @@ Core entities focus on data and controls that come directly from the local batte
 - Battery Status
 - Connection Status
 
-Battery Capacity is selected in 1.958 kWh module steps. Individual Battery N SOC
-entities follow the selected installed module count, but Home Assistant may need
-a full restart after the count changes to rebuild the entity list. Sensors are
-only created when the master exposes matching local `Storage_list` entries.
+Individual Battery N SOC entities are created from local `Storage_list` entries
+reported by the master. Restart Home Assistant or reload the integration after
+adding, removing, or replacing a battery/inverter so the entity list is rebuilt.
 
 `Local Operating Mode` is the last mode commanded through this local
 integration. If the AEC Cloud app changes the system, the selector may not
@@ -44,10 +42,14 @@ Diagnostic entities are intended for troubleshooting rather than dashboards:
 
 ## Energy Estimate Sensors
 
+- Battery Capacity, selected in 1.958 kWh module steps
 - Estimated House Demand
 - Estimated Charge Time
 - Will Fill Today
 - Recommended Overnight SOC
+
+Battery Capacity is used by energy and overnight charge calculations only. It
+does not control individual Battery N SOC entity creation.
 
 ### Recommended Overnight SOC
 
