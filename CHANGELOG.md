@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6.1
 
 - Returned individual Battery N SOC identification to the master-reported local `Storage_list`.
 - Battery Capacity no longer limits or removes individual Battery N SOC entities; it is only an advanced energy-estimate input.
