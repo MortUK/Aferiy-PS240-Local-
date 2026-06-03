@@ -14,6 +14,7 @@ CONF_MODEL = "model"
 CONF_TARIFF_PRESET = "tariff_preset"
 CONF_OFF_PEAK_START = "off_peak_start"
 CONF_OFF_PEAK_END = "off_peak_end"
+CONF_OVERNIGHT_CHARGING_MODE = "overnight_charging_mode"
 CONF_DEPENDENCY_SOLCAST = "dependency_solcast_confirmed"
 CONF_DEPENDENCY_HOME_OCCUPANCY = "dependency_home_occupancy_confirmed"
 
@@ -27,6 +28,19 @@ DEFAULT_TIMEOUT = 5  # seconds
 DEFAULT_OFF_PEAK_START = "23:30"
 DEFAULT_OFF_PEAK_END = "05:30"
 DEFAULT_TARIFF_PRESET = "octopus_intelligent_go"
+OVERNIGHT_CHARGE_MODE_DISABLED = "disabled"
+OVERNIGHT_CHARGE_MODE_SMART = "smart"
+OVERNIGHT_CHARGE_MODE_MANUAL = "manual"
+DEFAULT_OVERNIGHT_CHARGE_MODE = OVERNIGHT_CHARGE_MODE_DISABLED
+OVERNIGHT_CHARGE_MODE_LABELS: dict[str, str] = {
+    OVERNIGHT_CHARGE_MODE_SMART: "On",
+    OVERNIGHT_CHARGE_MODE_DISABLED: "Off",
+    OVERNIGHT_CHARGE_MODE_MANUAL: "Manual",
+}
+OVERNIGHT_CHARGE_MODE_FROM_LABEL: dict[str, str] = {
+    label: value for value, label in OVERNIGHT_CHARGE_MODE_LABELS.items()
+}
+OVERNIGHT_CHARGE_MODE_FROM_LABEL["Disabled"] = OVERNIGHT_CHARGE_MODE_DISABLED
 TARIFF_PRESETS: dict[str, tuple[str, str]] = {
     "snug_octopus": ("00:30", "06:30"),
     "octopus_go": ("00:30", "05:30"),

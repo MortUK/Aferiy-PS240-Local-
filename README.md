@@ -1,7 +1,7 @@
 # AFERIY PS240 (Local)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.5.6-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.6.0-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 
@@ -14,7 +14,7 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Local TCP connection to the battery, usually on port `8080`
 - Battery state of charge, power, PV, charge, discharge, and diagnostic sensors
 - Manual charge, discharge, idle, and self-consumption controls
-- Local-first overnight charging support through Home Assistant automations
+- Local-first automatic overnight charging with smart or manual SOC targets
 - Charge and discharge SOC limits
 - Charge/discharge power targets from 800 W to 1200 W for cautious PS240 testing
 - Physics-aware filtering for occasional invalid SOC/power readings
@@ -53,7 +53,11 @@ If you have more than one PS240 in the same AFERIY/AEC Cloud system, add only th
 
 The master controls the slave units. You do not need a separate local integration entry for each battery. In testing, one local connection to the master has been more reliable than trying to connect to every unit.
 
-System-level readings are reported through the master. Battery SOC is the average state of charge across all connected units, matching the behaviour shown in the AEC Cloud app.
+System-level readings are reported through the master. System Average Battery SOC is the main multi-unit SOC source and matches the behaviour shown in the AEC Cloud app.
+
+Set **Battery Capacity** to the total number of installed 1.958 kWh battery modules. The integration creates generic `Battery 1 SOC`, `Battery 2 SOC`, and similar entities when the master exposes matching local `Storage_list` entries. This avoids tying dashboards to a particular serial number when a unit is replaced.
+
+After reducing or increasing the installed module count, restart Home Assistant so the individual battery entity list is rebuilt. Changing the preset updates capacity calculations immediately, but removed battery slots may remain visible until a full restart.
 
 ## Options
 
@@ -65,15 +69,27 @@ Open the integration options to adjust:
 - Off-peak start and end times
 - External helper confirmations for advanced estimates
 
+The device Configuration section also provides Battery Capacity, Overnight Charge mode, Manual SOC, Off-Peak Tariff, Off-Peak Start/End, Solar Availability, Overnight Status, and Recommended Overnight SOC.
+
 The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
 
 The off-peak window defaults to Octopus Intelligent Go, 23:30 to 05:30. Named presets are available for Snug Octopus, Octopus Go, Octopus Intelligent Go, E.ON Next Drive, British Gas Electric Driver, and British Gas Economy 7. If your tariff uses different cheap-rate hours, choose Custom and set the start and end times manually in 24-hour `HH:MM` format. These times are used by the overnight target and Pre-Sunrise Need calculations.
 
 The external helper checkboxes are reminders for installers. They do not install or validate integrations. Smart estimates look for standard Solcast forecast files and sensors and use `zone.home` for home occupancy. Battery control and the overnight target use the configured tariff window and AECC grid reading; Shelly comparison remains diagnostic only.
 
-### Smart Overnight Charging Target
+### Smart Overnight Charging
 
-The optional Recommended Overnight SOC sensor helps users with cheap overnight electricity charge only what they are likely to need before the next off-peak window, using tomorrow's solar forecast to reduce unnecessary grid charging.
+Automatic Overnight Charging is disabled by default and runs entirely through the local TCP connection when enabled:
+
+- **On** charges to Recommended Overnight SOC.
+- **Manual** charges to the Manual SOC setting.
+- **Off** leaves overnight charging disabled.
+- Starts one minute after the configured off-peak start to avoid peak-rate overlap.
+- Monitors System Average Battery SOC throughout the window and starts charging if SOC falls to or below the target.
+- Holds the battery at the target after charging begins.
+- Restores Self-Gen/Zero Export five minutes before off-peak ends because the PS240 can take several minutes to change power source.
+
+Recommended Overnight SOC helps users with cheap overnight electricity charge only what they are likely to need before the next off-peak window, using tomorrow's solar forecast to reduce unnecessary grid charging.
 
 - Uses the configured battery capacity and reserve/minimum SOC.
 - Learns a weighted 14-day time-of-day house demand profile from Home Assistant history.
@@ -84,16 +100,15 @@ The optional Recommended Overnight SOC sensor helps users with cheap overnight e
 - Estimates Pre-Sunrise Need from the off-peak end until sustained forecast solar should cover house demand.
 - Gives weak early-morning forecast solar partial credit until sustained useful solar is expected.
 - On low-solar days with no useful solar handover, still credits part of the forecast solar before converting the remaining kWh need into a battery-size-aware SOC target.
-- Includes a Solar Unavailable integration switch, treating forecast solar as 0 kWh and showing Batteries Only status.
+- Includes a Solar Availability dropdown; Solar Unavailable treats forecast solar as 0 kWh and shows Batteries Only status.
 - Adds battery loss, grid charge loss, a dynamic buffer, and a forecast confidence adjustment.
 - Applies a safer minimum SOC if Solcast or demand history is stale or missing.
 - Exposes a plain-English target breakdown so dashboards can show why the target was chosen.
 
-Home Assistant should perform the actual overnight timing. Local schedule-slot
-registers mirrored from the AEC Cloud app were tested and behaved as immediate
-commands on the PS240, so they are not exposed as normal controls. The safer
-local pattern is: start Charge at the off-peak start time, watch System Average
-Battery SOC, then restore Self-Gen/Zero Export at the off-peak end time.
+Local schedule-slot registers mirrored from the AEC Cloud app were tested and
+behaved as immediate commands on the PS240, so they are not exposed as normal
+controls. The integration-owned scheduler instead performs the timing in Home
+Assistant and sends the same proven local Charge, Idle, and Self-Gen commands.
 
 ### Solar Clipping And Export
 

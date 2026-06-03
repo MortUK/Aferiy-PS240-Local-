@@ -24,6 +24,7 @@ from .const import (
     DEFAULT_BATTERY_CAPACITY_KWH,
     DOMAIN,
     MAX_REGISTER_POWER_DEFAULT,
+    OVERNIGHT_CHARGE_MODE_MANUAL,
     PS240_EXPERIMENTAL_MAX_OUTPUT_W,
 )
 from .coordinator import AeccBatteryCoordinator
@@ -41,7 +42,7 @@ async def async_setup_entry(
         [
             AeccChargePowerSlider(coordinator, config_entry),
             AeccDischargePowerSlider(coordinator, config_entry),
-            AeccBatteryCapacity(coordinator, config_entry),
+            AeccManualOvernightChargeTarget(coordinator, config_entry),
             AeccMinSoc(coordinator, config_entry),
             AeccMaxSoc(coordinator, config_entry),
         ]
@@ -246,6 +247,82 @@ class AeccBatteryCapacity(CoordinatorEntity[AeccBatteryCoordinator], NumberEntit
             "Stored AECC battery capacity as %.2f kWh. No battery command sent.",
             self._capacity_kwh,
         )
+        self.async_write_ha_state()
+
+
+class AeccManualOvernightChargeTarget(
+    CoordinatorEntity[AeccBatteryCoordinator],
+    NumberEntity,
+    RestoreEntity,
+):
+    """Manual SOC target used by the SMART Config overnight scheduler."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Manual SOC"
+    _attr_icon = "mdi:battery-clock"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_device_class = NumberDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_native_min_value = 10
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+    _attr_mode = NumberMode.SLIDER
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_manual_overnight_charge_target"
+        self._commanded: float = float(getattr(coordinator, "manual_overnight_target_soc", 80))
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the manual overnight target without sending a battery command."""
+        await super().async_added_to_hass()
+
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            try:
+                restored = float(last_state.state)
+                self._commanded = _clamp_number(
+                    restored,
+                    float(self._attr_native_min_value),
+                    float(self._attr_native_max_value),
+                )
+            except (TypeError, ValueError):
+                self._commanded = 80
+
+        self.coordinator.manual_overnight_target_soc = int(self._commanded)
+        _LOGGER.info(
+            "Restored AECC manual overnight charge target to %s%%",
+            int(self._commanded),
+        )
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> float:
+        return float(getattr(self.coordinator, "manual_overnight_target_soc", self._commanded))
+
+    @property
+    def available(self) -> bool:
+        return (
+            self.coordinator.last_update_success
+            and getattr(self.coordinator, "overnight_charging_mode", None)
+            == OVERNIGHT_CHARGE_MODE_MANUAL
+        )
+
+    async def async_set_native_value(self, value: float) -> None:
+        target = int(
+            _clamp_number(
+                float(value),
+                float(self._attr_native_min_value),
+                float(self._attr_native_max_value),
+            )
+        )
+        self._commanded = target
+        self.coordinator.manual_overnight_target_soc = target
+        self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
 
 

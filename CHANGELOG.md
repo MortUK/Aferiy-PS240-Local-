@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0
+
+- Added integration-owned Automatic Overnight Charging with Off, On, and Manual modes.
+- Added local SMART configuration controls for tariff preset, custom off-peak start/end times, and manual overnight SOC.
+- Starts automatic charging one minute after off-peak begins, monitors System Average Battery SOC throughout the window, and restores Self-Gen/Zero Export five minutes before off-peak ends.
+- Added Overnight Status and integration-owned House Demand Energy and House Demand Daily sensors.
+- Made Recommended Overnight SOC and the Battery Capacity preset available as standard configuration features.
+- Replaced the Solar Unavailable switch with a Solar Availability dropdown offering Solar Available and Solar Unavailable.
+- Removed redundant Battery SOC, Local Unit Battery SOC, Runtime Left, manual Battery Capacity, and old Solar Unavailable entities.
+- Made individual Battery N SOC entities follow the installed module count selected through Battery Capacity and remove stale higher-numbered slots after restart.
+- Documented that changing the installed battery module count may require a full Home Assistant restart to rebuild individual battery SOC entities.
+
 ## 1.5.6
 
 - Made AC Charging Power prefer the system-total cloud/local summary field before falling back to the local unit field.

@@ -10,13 +10,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .cleaners import CLEANERS, CleanerContext
 from .const import (
     DEFAULT_BRAND_PROFILE,
     DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_BATTERY_MODULE_COUNT,
+    DEFAULT_OFF_PEAK_END,
+    DEFAULT_OFF_PEAK_START,
+    DEFAULT_TARIFF_PRESET,
+    DEFAULT_OVERNIGHT_CHARGE_MODE,
     DOMAIN,
     MAX_BATTERY_POWER_W,
     MAX_REGISTER_POWER_DEFAULT,
@@ -36,6 +43,10 @@ from .const import (
     REG_MIN_SOC,
     REG_SCHEDULE_MODE,
     SLOT_DISABLED,
+    OVERNIGHT_CHARGE_MODE_DISABLED,
+    OVERNIGHT_CHARGE_MODE_MANUAL,
+    OVERNIGHT_CHARGE_MODE_SMART,
+    TARIFF_PRESETS,
 )
 from .tcp_client import AeccTcpClient
 
@@ -118,14 +129,20 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         hass: HomeAssistant,
         client: AeccTcpClient,
         device_name: str,
+        entry_id: str | None = None,
         poll_interval: int = POLL_INTERVAL,
         manufacturer: str = "AECC",
         model: str = "",
         extended_power: bool = False,
         brand_profile: dict[str, Any] | None = None,
+        off_peak_start: str = DEFAULT_OFF_PEAK_START,
+        off_peak_end: str = DEFAULT_OFF_PEAK_END,
+        smart_tariff_preset: str = DEFAULT_TARIFF_PRESET,
+        overnight_charging_mode: str = DEFAULT_OVERNIGHT_CHARGE_MODE,
     ) -> None:
         self.client = client
         self.device_name = device_name
+        self._entry_id = entry_id
         self._manufacturer = manufacturer
         self._model = model
         self._consecutive_failures: int = 0
@@ -143,6 +160,25 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.commanded_charge_power: int = 800
         self.commanded_discharge_power: int = 800
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
+        self.configured_battery_module_count: int = DEFAULT_BATTERY_MODULE_COUNT
+        self.manual_overnight_target_soc: int = 80
+        self.overnight_charging_mode: str = overnight_charging_mode
+        self.off_peak_start: str = off_peak_start
+        self.off_peak_end: str = off_peak_end
+        self.manual_off_peak_start: str = off_peak_start
+        self.manual_off_peak_end: str = off_peak_end
+        self.smart_tariff_preset: str = smart_tariff_preset
+        self._overnight_task: asyncio.Task | None = None
+        self._overnight_status: dict[str, Any] = {
+            "state": "Off",
+            "mode": overnight_charging_mode,
+            "reason": "Automatic overnight charging is off.",
+        }
+        self._overnight_last_action: str | None = None
+        self._overnight_last_action_at: datetime | None = None
+        self._overnight_last_window_key: str | None = None
+        self._overnight_last_restored_window_key: str | None = None
+        self._overnight_scheduler_started_charge: bool = False
         self.solar_unavailable_override: bool = False
         self._commanded_min_soc: int = 10
         self._commanded_max_soc: int = 100
@@ -226,6 +262,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_successful_update = datetime.now(UTC)
         self.last_failure_reason = None
         self._last_good_data = raw
+        self._schedule_overnight_evaluation()
         return raw
 
     # ── Public access to commanded state (used by entity platforms) ──────────
@@ -431,6 +468,379 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         of indefinitely showing a stale value.
         """
         return self._cleaner_last_accepted_at.get(canonical_key)
+
+    @property
+    def overnight_charging_status(self) -> dict[str, Any]:
+        """Current local overnight charging scheduler status."""
+        return dict(self._overnight_status)
+
+    def set_overnight_charging_mode(self, mode: str) -> None:
+        """Store the automatic overnight charging mode locally."""
+        if mode not in (
+            OVERNIGHT_CHARGE_MODE_DISABLED,
+            OVERNIGHT_CHARGE_MODE_SMART,
+            OVERNIGHT_CHARGE_MODE_MANUAL,
+        ):
+            mode = OVERNIGHT_CHARGE_MODE_DISABLED
+        self.overnight_charging_mode = mode
+        if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            self._overnight_status = {
+                "state": "Off",
+                "mode": mode,
+                "reason": "Automatic overnight charging is off.",
+            }
+        self._schedule_overnight_evaluation()
+
+    def set_off_peak_window(self, start: str, end: str) -> None:
+        """Update the tariff window used by the local overnight scheduler."""
+        self.off_peak_start = self._normalise_hhmm(start, DEFAULT_OFF_PEAK_START)
+        self.off_peak_end = self._normalise_hhmm(end, DEFAULT_OFF_PEAK_END)
+        self._schedule_overnight_evaluation()
+
+    def set_smart_tariff_preset(self, preset: str) -> None:
+        """Set the local SMART tariff preset without reloading the config entry."""
+        if preset not in TARIFF_PRESETS:
+            preset = DEFAULT_TARIFF_PRESET
+        self.smart_tariff_preset = preset
+        if preset == "custom":
+            self.set_off_peak_window(self.manual_off_peak_start, self.manual_off_peak_end)
+            return
+        start, end = TARIFF_PRESETS.get(
+            preset,
+            (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
+        )
+        self.manual_off_peak_start = self._normalise_hhmm(start, DEFAULT_OFF_PEAK_START)
+        self.manual_off_peak_end = self._normalise_hhmm(end, DEFAULT_OFF_PEAK_END)
+        self.set_off_peak_window(start, end)
+
+    def set_manual_off_peak_time(self, *, start: str | None = None, end: str | None = None) -> None:
+        """Store custom SMART tariff times and select the custom preset."""
+        if start is not None:
+            self.manual_off_peak_start = self._normalise_hhmm(start, DEFAULT_OFF_PEAK_START)
+        if end is not None:
+            self.manual_off_peak_end = self._normalise_hhmm(end, DEFAULT_OFF_PEAK_END)
+        self.set_smart_tariff_preset("custom")
+
+    def _schedule_overnight_evaluation(self) -> None:
+        """Queue one scheduler pass after fresh data without blocking polling."""
+        if self.overnight_charging_mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            return
+        if self._overnight_task is not None and not self._overnight_task.done():
+            return
+        self._overnight_task = self.hass.async_create_task(
+            self.async_evaluate_overnight_charging()
+        )
+
+    async def async_evaluate_overnight_charging(self) -> None:
+        """Apply the local overnight charge-to-target decision tree."""
+        mode = self.overnight_charging_mode
+        if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            return
+
+        now = dt_util.now()
+        window = self._overnight_window(now)
+        target_soc, target_source = self._overnight_target_soc(mode)
+        current_soc = self._safe_float(self.get_value("average_battery_soc"))
+        base_attrs = {
+            "mode": mode,
+            "target_source": target_source,
+            "target_soc": target_soc,
+            "current_soc": round(current_soc, 1) if current_soc is not None else None,
+            "off_peak_start": self.off_peak_start,
+            "off_peak_end": self.off_peak_end,
+            "effective_start": window["effective_start"].isoformat(),
+            "effective_end": window["effective_end"].isoformat(),
+            "window_key": window["key"],
+            "start_delay_minutes": 1,
+            "end_early_minutes": 5,
+            "last_action": self._overnight_last_action,
+            "last_action_at": self._overnight_last_action_at.isoformat()
+            if self._overnight_last_action_at
+            else None,
+        }
+
+        if self._overnight_last_window_key != window["key"]:
+            self._overnight_last_window_key = window["key"]
+            self._overnight_scheduler_started_charge = False
+            self._overnight_last_action = None
+
+        if target_soc is None:
+            self._set_overnight_status(
+                "Waiting for target",
+                "The smart target sensor is not available yet.",
+                base_attrs,
+            )
+            return
+
+        if current_soc is None:
+            self._set_overnight_status(
+                "Waiting for SOC",
+                "System Average Battery SOC is not available yet.",
+                base_attrs,
+            )
+            return
+
+        if now < window["effective_start"]:
+            if self._overnight_scheduler_started_charge:
+                await self._overnight_restore(
+                    self._overnight_last_window_key or window["key"],
+                    "Restoring Self-Gen",
+                    "The previous overnight charge window has ended; restoring Self-Gen/Zero Export.",
+                    base_attrs,
+                )
+                return
+            self._set_overnight_status(
+                "Waiting for off-peak",
+                "Waiting until 1 minute after the cheap-rate window starts.",
+                base_attrs,
+            )
+            return
+
+        if window["effective_start"] <= now < window["effective_end"]:
+            if current_soc <= target_soc:
+                await self._overnight_charge_to_target(target_soc, base_attrs)
+            elif self._overnight_scheduler_started_charge:
+                await self._overnight_idle_above_target(target_soc, base_attrs)
+            else:
+                self._set_overnight_status(
+                    "Monitoring target",
+                    "SOC is above target; waiting in case it falls during off-peak.",
+                    base_attrs,
+                )
+            return
+
+        if window["effective_end"] <= now < window["end"]:
+            await self._overnight_restore(
+                window["key"],
+                "Ending early",
+                "Restoring Self-Gen/Zero Export 5 minutes before off-peak ends.",
+                base_attrs,
+            )
+            return
+
+        if (
+            now >= window["end"]
+            and self._overnight_scheduler_started_charge
+            and self._overnight_last_restored_window_key != window["key"]
+        ):
+            await self._overnight_restore(
+                window["key"],
+                "Restoring Self-Gen",
+                "Off-peak has ended; restoring Self-Gen/Zero Export.",
+                base_attrs,
+            )
+            return
+
+        self._set_overnight_status(
+            "Outside off-peak",
+            "Automatic overnight charging is waiting for the next cheap-rate window.",
+            base_attrs,
+        )
+
+    async def _overnight_charge_to_target(
+        self,
+        target_soc: int,
+        base_attrs: dict[str, Any],
+    ) -> None:
+        if self._overnight_last_action == "charge":
+            self._set_overnight_status(
+                "Charging to target",
+                f"Charging until System Average SOC is above {target_soc}%.",
+                base_attrs,
+            )
+            return
+
+        power = int(getattr(self, "commanded_charge_power", 800) or 800)
+        success = await self.async_set_battery_control("Charge", power)
+        if success:
+            self._overnight_scheduler_started_charge = True
+            self._overnight_last_action = "charge"
+            self._overnight_last_action_at = datetime.now(UTC)
+            self.commanded_operating_mode = "Charge"
+            self._set_overnight_status(
+                "Charging to target",
+                f"Started local charge at {power} W per unit until {target_soc}% SOC.",
+                {
+                    **base_attrs,
+                    "charge_power_w_per_unit": power,
+                    "last_action": self._overnight_last_action,
+                    "last_action_at": self._overnight_last_action_at.isoformat(),
+                },
+            )
+        else:
+            self._set_overnight_status(
+                "Charge command failed",
+                "The battery did not confirm the local charge command.",
+                {**base_attrs, "charge_power_w_per_unit": power},
+            )
+
+    async def _overnight_idle_above_target(
+        self,
+        target_soc: int,
+        base_attrs: dict[str, Any],
+    ) -> None:
+        if self._overnight_last_action == "idle":
+            self._set_overnight_status(
+                "Target reached",
+                f"SOC is above {target_soc}%; holding idle until the window ends.",
+                {
+                    **base_attrs,
+                    "last_action": self._overnight_last_action,
+                    "last_action_at": self._overnight_last_action_at.isoformat(),
+                },
+            )
+            return
+
+        success = await self.async_set_battery_control("Idle", 0)
+        if success:
+            self._overnight_last_action = "idle"
+            self._overnight_last_action_at = datetime.now(UTC)
+            self.commanded_operating_mode = "Idle"
+            self._set_overnight_status(
+                "Target reached",
+                f"SOC is above {target_soc}%; holding idle until the window ends.",
+                base_attrs,
+            )
+        else:
+            self._set_overnight_status(
+                "Idle command failed",
+                "The battery did not confirm the local idle command.",
+                base_attrs,
+            )
+
+    async def _overnight_restore(
+        self,
+        window_key: str,
+        state: str,
+        reason: str,
+        base_attrs: dict[str, Any],
+    ) -> None:
+        if self._overnight_last_restored_window_key == window_key:
+            self._set_overnight_status(state, reason, base_attrs)
+            return
+
+        success = await self.async_restore_self_consumption()
+        if success:
+            solar_unavailable_reset = bool(self.solar_unavailable_override)
+            self.solar_unavailable_override = False
+            self._overnight_last_restored_window_key = window_key
+            self._overnight_last_action = "restore_self_gen"
+            self._overnight_last_action_at = datetime.now(UTC)
+            self._overnight_scheduler_started_charge = False
+            self._set_overnight_status(
+                state,
+                reason,
+                {
+                    **base_attrs,
+                    "last_action": self._overnight_last_action,
+                    "last_action_at": self._overnight_last_action_at.isoformat(),
+                    "solar_unavailable_reset": solar_unavailable_reset,
+                },
+            )
+        else:
+            self._set_overnight_status(
+                "Restore failed",
+                "The battery did not confirm the Self-Gen/Zero Export restore command.",
+                base_attrs,
+            )
+
+    def _set_overnight_status(
+        self,
+        state: str,
+        reason: str,
+        attrs: dict[str, Any],
+    ) -> None:
+        self._overnight_status = {
+            "state": state,
+            "reason": reason,
+            **attrs,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+
+    def _overnight_target_soc(self, mode: str) -> tuple[int | None, str]:
+        if mode == OVERNIGHT_CHARGE_MODE_MANUAL:
+            return int(self.manual_overnight_target_soc), "manual_slider"
+
+        state = self.hass.states.get(self._recommended_overnight_soc_entity_id())
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None, "recommended_overnight_soc"
+        try:
+            target = round(float(state.state))
+        except (TypeError, ValueError):
+            return None, "recommended_overnight_soc"
+        return int(max(self._commanded_min_soc, min(target, 100))), "recommended_overnight_soc"
+
+    def _recommended_overnight_soc_entity_id(self) -> str:
+        if not self._entry_id:
+            return "sensor.aecc_battery_recommended_overnight_soc"
+        registry = er.async_get(self.hass)
+        entity_id = registry.async_get_entity_id(
+            "sensor",
+            DOMAIN,
+            f"{self._entry_id}_recommended_overnight_soc",
+        )
+        return entity_id or "sensor.aecc_battery_recommended_overnight_soc"
+
+    def _overnight_window(self, now: datetime) -> dict[str, Any]:
+        start_hour, start_minute = self._parse_hhmm(self.off_peak_start, DEFAULT_OFF_PEAK_START)
+        end_hour, end_minute = self._parse_hhmm(self.off_peak_end, DEFAULT_OFF_PEAK_END)
+        start = now.replace(
+            hour=start_hour,
+            minute=start_minute,
+            second=0,
+            microsecond=0,
+        )
+        end = now.replace(
+            hour=end_hour,
+            minute=end_minute,
+            second=0,
+            microsecond=0,
+        )
+
+        if start <= end:
+            if now >= end:
+                start += timedelta(days=1)
+                end += timedelta(days=1)
+        else:
+            if now < end:
+                start -= timedelta(days=1)
+            else:
+                end += timedelta(days=1)
+
+        return {
+            "key": start.strftime("%Y-%m-%d"),
+            "start": start,
+            "end": end,
+            "effective_start": start + timedelta(minutes=1),
+            "effective_end": end - timedelta(minutes=5),
+        }
+
+    @classmethod
+    def _parse_hhmm(cls, value: str, fallback: str) -> tuple[int, int]:
+        normalised = cls._normalise_hhmm(value, fallback)
+        hour_s, minute_s = normalised.split(":", 1)
+        return int(hour_s), int(minute_s)
+
+    @staticmethod
+    def _normalise_hhmm(value: str, fallback: str) -> str:
+        try:
+            hour_s, minute_s = str(value).strip().split(":", 1)
+            hour = int(hour_s)
+            minute = int(minute_s)
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+        except (AttributeError, TypeError, ValueError):
+            pass
+        return fallback
+
+    @staticmethod
+    def _safe_float(value: Any) -> float | None:
+        try:
+            if value is None:
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     # Delay between a SET command and the readback that verifies the device
     # actually accepted the change. Some AECC devices apply writes lazily;

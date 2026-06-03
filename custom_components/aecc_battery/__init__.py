@@ -20,8 +20,16 @@ from .const import (
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_NAME,
+    CONF_OFF_PEAK_END,
+    CONF_OFF_PEAK_START,
+    CONF_OVERNIGHT_CHARGING_MODE,
     CONF_PORT,
+    CONF_TARIFF_PRESET,
     DEFAULT_BRAND_PROFILE,
+    DEFAULT_OFF_PEAK_END,
+    DEFAULT_OFF_PEAK_START,
+    DEFAULT_TARIFF_PRESET,
+    DEFAULT_OVERNIGHT_CHARGE_MODE,
     DEFAULT_TIMEOUT,
     DOMAIN,
 )
@@ -32,10 +40,7 @@ from .tcp_manager import TCPClientManager
 
 _LOGGER = logging.getLogger(__name__)
 
-# The switch platform only exposes local helper switches. Raw EMS control is
-# deliberately not exposed; normal battery control should go through the clean
-# Operating Mode select.
-PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SELECT, Platform.SWITCH]
+PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SELECT, Platform.TIME]
 
 SERVICE_SNAPSHOT_CONTROL_REGISTERS = "snapshot_control_registers"
 SERVICE_SNAPSHOT_POWER_FLOW = "snapshot_power_flow"
@@ -44,9 +49,7 @@ SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION = "restore_schedule_3_self_consumpti
 MAX_SNAPSHOT_REGISTER_COUNT = 250
 
 POWER_FLOW_ENTITY_IDS = (
-    "sensor.aecc_battery_battery_soc",
     "sensor.aecc_battery_system_average_battery_soc",
-    "sensor.aecc_battery_local_unit_battery_soc",
     "sensor.aecc_battery_pv_power",
     "sensor.aecc_battery_ac_charging_power",
     "sensor.aecc_battery_total_charge_power",
@@ -57,15 +60,21 @@ POWER_FLOW_ENTITY_IDS = (
     "sensor.aecc_battery_battery_status",
     "sensor.aecc_battery_control_enable_status",
     "sensor.aecc_battery_estimated_house_demand",
-    "sensor.aecc_battery_runtime_at_current_house_demand",
+    "sensor.aecc_battery_house_demand_energy",
+    "sensor.aecc_battery_house_demand_daily",
     "sensor.aecc_battery_recommended_overnight_soc",
     "sensor.aecc_battery_grid_meter_agreement",
     "sensor.aecc_battery_charging_reason",
+    "sensor.aecc_battery_automatic_overnight_charging_status",
     "select.aecc_battery_operating_mode",
     "select.aecc_battery_battery_capacity_preset",
+    "select.aecc_battery_automatic_overnight_charging",
+    "select.aecc_battery_smart_tariff_preset",
     "number.aecc_battery_charge_power_target",
     "number.aecc_battery_discharge_power_target",
-    "number.aecc_battery_battery_capacity",
+    "number.aecc_battery_manual_overnight_charge_target",
+    "time.aecc_battery_smart_off_peak_start",
+    "time.aecc_battery_smart_off_peak_end",
     "number.aecc_battery_charge_limit",
     "number.aecc_battery_discharge_limit",
     "sensor.shelly_grid_import_power",
@@ -78,7 +87,7 @@ POWER_FLOW_ENTITY_IDS = (
     "sensor.aferiy_actual_bat_basic_discharge_power",
     "sensor.aferiy_zero_feed_in",
     "sensor.aferiy_generation_self_consumption",
-    "switch.aecc_battery_solar_unavailable",
+    "select.aecc_battery_solar_availability",
 )
 
 POWER_FLOW_DYNAMIC_SENSOR_SUFFIXES = (
@@ -220,10 +229,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         client,
         name,
+        entry_id=entry.entry_id,
         manufacturer=manufacturer,
         model=model,
         extended_power=extended_power,
         brand_profile=brand_profile,
+        off_peak_start=entry.options.get(CONF_OFF_PEAK_START, DEFAULT_OFF_PEAK_START),
+        off_peak_end=entry.options.get(CONF_OFF_PEAK_END, DEFAULT_OFF_PEAK_END),
+        smart_tariff_preset=entry.options.get(CONF_TARIFF_PRESET, DEFAULT_TARIFF_PRESET),
+        overnight_charging_mode=entry.options.get(
+            CONF_OVERNIGHT_CHARGING_MODE,
+            DEFAULT_OVERNIGHT_CHARGE_MODE,
+        ),
     )
     await coordinator.async_config_entry_first_refresh()
 
@@ -233,6 +250,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     _async_remove_old_per_battery_entities(hass, entry)
+    _async_remove_withdrawn_config_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _async_register_services(hass)
 
@@ -250,6 +268,22 @@ def _async_remove_old_per_battery_entities(hass: HomeAssistant, entry: ConfigEnt
             DOMAIN,
             f"{entry.entry_id}_{suffix}",
         )
+        if entity_id is not None:
+            registry.async_remove(entity_id)
+
+
+def _async_remove_withdrawn_config_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove config entities that have been replaced by cleaner controls."""
+    registry = er.async_get(hass)
+    withdrawn_entities = (
+        (Platform.NUMBER, f"{entry.entry_id}_battery_capacity"),
+        (Platform.SENSOR, f"{entry.entry_id}_battery_soc"),
+        (Platform.SENSOR, f"{entry.entry_id}_local_unit_battery_soc"),
+        (Platform.SENSOR, f"{entry.entry_id}_runtime_at_current_house_demand"),
+        (Platform.SWITCH, f"{entry.entry_id}_solar_unavailable"),
+    )
+    for platform, unique_id in withdrawn_entities:
+        entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
         if entity_id is not None:
             registry.async_remove(entity_id)
 
