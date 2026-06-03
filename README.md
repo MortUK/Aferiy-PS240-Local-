@@ -1,5 +1,7 @@
 # AFERIY PS240 (Local)
 
+![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.png)
+
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
 [![Version](https://img.shields.io/badge/version-v1.6.1-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
