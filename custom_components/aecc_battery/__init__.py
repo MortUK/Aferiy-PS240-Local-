@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -48,6 +49,8 @@ SERVICE_SNAPSHOT_POWER_FLOW = "snapshot_power_flow"
 SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION = "restore_original_self_consumption"
 SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION = "restore_schedule_3_self_consumption"
 MAX_SNAPSHOT_REGISTER_COUNT = 250
+FRONTEND_PATH = Path(__file__).parent / "frontend"
+FRONTEND_URL = "/aecc_battery_static"
 
 POWER_FLOW_ENTITY_IDS = (
     "sensor.aecc_battery_system_average_battery_soc",
@@ -252,6 +255,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_probe_device_management()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    await _async_register_frontend(hass)
     _async_remove_old_per_battery_entities(hass, entry)
     _async_remove_stale_battery_soc_entities(hass, entry, coordinator)
     _async_remove_withdrawn_config_entities(hass, entry)
@@ -262,6 +266,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     _LOGGER.info("AECC Battery '%s' (%s) set up at %s:%s", name, manufacturer, host, port)
     return True
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Serve bundled Lovelace card assets."""
+    if hass.data.setdefault(DOMAIN, {}).get("_frontend_registered"):
+        return
+
+    try:
+        from homeassistant.components.http import StaticPathConfig
+    except ImportError as exc:
+        _LOGGER.debug("AECC Battery frontend card not registered: %s", exc)
+        return
+
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                FRONTEND_URL,
+                str(FRONTEND_PATH),
+                cache_headers=True,
+            )
+        ]
+    )
+    hass.data[DOMAIN]["_frontend_registered"] = True
 
 
 def _async_remove_old_per_battery_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:

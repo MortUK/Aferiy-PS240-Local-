@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added a bundled AFERIY Overnight Plan Lovelace card with card-picker registration and README setup instructions.
+
 ## 1.6.2
 
 - Added PV Surplus Charge Trigger as a local `0-50 W` control for systems with unmanaged microinverters or other PV sources on the same electrical system.

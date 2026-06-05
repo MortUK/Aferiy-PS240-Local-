@@ -23,6 +23,7 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Physics-aware filtering for occasional invalid SOC/power readings
 - Home Assistant diagnostics export support
 - Custom AFERIY PS240 icon
+- Bundled AFERIY Overnight Plan dashboard card
 - Connection health and last-command result sensors
 - Grid meter agreement and charging reason diagnostics
 
@@ -114,6 +115,26 @@ The overnight target also tracks the whole-day demand versus solar forecast and
 the Post-Sunset Need, so the battery target can keep enough reserve after solar
 falls away to reach the next cheap-rate window without unnecessary peak import.
 
+### Dashboard Card
+
+The integration includes a bundled **AFERIY Overnight Plan** Lovelace card that
+shows the smart overnight target, battery capacity, demand versus solar balance,
+Pre-Sunrise Need, Post-Sunset Need, useful solar time, forecast confidence, and
+SMART History completeness.
+
+![AFERIY Overnight Plan dashboard card](docs/images/aferiy-overnight-plan-card.png)
+
+To make it available in Home Assistant's card picker:
+
+1. Restart Home Assistant after installing or updating the integration.
+2. Add dashboard resource `/aecc_battery_static/aferiy-overnight-plan-card.js`
+   as a JavaScript module.
+3. Edit a dashboard, choose Add card, switch to By card, and search for
+   `AFERIY Overnight Plan`.
+
+See [Dashboard Card](docs/dashboard-card.md) for manual YAML and optional entity
+overrides.
+
 Local schedule-slot registers mirrored from the AEC Cloud app were tested and
 behaved as immediate commands on the PS240, so they are not exposed as normal
 controls. The integration-owned scheduler instead performs the timing in Home
@@ -148,6 +169,7 @@ The PS240 has been observed to accept 800 W reliably over local TCP. The integra
 ## Documentation
 
 - [Entities](docs/entities.md)
+- [Dashboard Card](docs/dashboard-card.md)
 - [AEC Cloud App Findings](docs/cloud-app-findings.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Changelog](CHANGELOG.md)
