@@ -46,7 +46,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
     const target = this._stateText(recommended, "%");
     const plannedNeed = this._plannedNeedKwh(recommended, attrs, breakdown);
     const needed = this._numberText(plannedNeed, 3, "kWh");
-    const status = this._cleanText(overnightStatus?.state, "Waiting");
+    const status = this._cleanText(overnightStatus?.state, "Waiting for off-peak");
     const tariff = this._tariffLabel(hass);
     const solarMode = this._solarMode(solarAvailability, attrs);
     const demand = this._numberText(
@@ -147,13 +147,13 @@ class AferiyOvernightPlanCard extends HTMLElement {
             color: var(--tile-color, var(--aferiy-accent));
             --mdc-icon-size: 24px;
           }
-          .tile .value {
+          .tile .primary {
             font-size: 15px;
             font-weight: 700;
             line-height: 1.2;
             overflow-wrap: anywhere;
           }
-          .tile .label {
+          .tile .secondary {
             color: var(--secondary-text-color);
             font-size: 12px;
             line-height: 1.2;
@@ -187,9 +187,9 @@ class AferiyOvernightPlanCard extends HTMLElement {
         </div>
 
         <div class="tiles">
-          ${this._tile("mdi:battery-clock", status, "Overnight Status", "#9e9e9e")}
-          ${this._tile("mdi:solar-power-variant", solarMode, "Solar Mode", "var(--aferiy-warn)")}
-          ${this._tile("mdi:cash-clock", tariff, "Tariff", "#9e9e9e")}
+          ${this._tile("mdi:battery-clock", "Overnight Status", status, "#9e9e9e")}
+          ${this._tile("mdi:solar-power-variant", "Solar Mode", solarMode, "var(--aferiy-warn)")}
+          ${this._tile("mdi:cash-clock", "Tariff", tariff, "#9e9e9e")}
         </div>
 
         <div class="tiles two">
@@ -215,32 +215,33 @@ class AferiyOvernightPlanCard extends HTMLElement {
 
   _findState(configuredEntity, domain, suffix) {
     const states = this._hass?.states || {};
-    if (configuredEntity && states[configuredEntity]) {
+    if (configuredEntity && states[configuredEntity] && this._isKnown(states[configuredEntity].state)) {
       return states[configuredEntity];
     }
 
     const exact = `${domain}.aferiy_ps240_local${suffix}`;
-    if (states[exact]) {
+    if (states[exact] && this._isKnown(states[exact].state)) {
       return states[exact];
     }
 
     const garage = `${domain}.garage_aferiy_ps240_local${suffix}`;
-    if (states[garage]) {
+    if (states[garage] && this._isKnown(states[garage].state)) {
       return states[garage];
     }
 
     return Object.values(states).find((state) => (
       state.entity_id.startsWith(`${domain}.`)
       && state.entity_id.endsWith(suffix)
+      && this._isKnown(state.state)
     ));
   }
 
-  _tile(icon, value, label, color) {
+  _tile(icon, primary, secondary, color) {
     return `
       <div class="tile" style="--tile-color: ${color}">
         <ha-icon icon="${icon}"></ha-icon>
-        <div class="value">${this._escape(value)}</div>
-        <div class="label">${this._escape(label)}</div>
+        <div class="primary">${this._escape(primary)}</div>
+        <div class="secondary">${this._escape(secondary)}</div>
       </div>
     `;
   }
