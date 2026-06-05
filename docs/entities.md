@@ -31,7 +31,7 @@ or cloud-originated changes.
 
 `PV Surplus Charge Trigger` is useful when the AFERIY system shares the same
 electrical system with an unmanaged micro-inverter or another PV source that it
-does not directly control. When export rises above the chosen `0 W` to `50 W`
+does not directly control. When your Smart Meter (usually Shelly) sees export rise above the chosen `0 W` to `50 W`
 threshold, the batteries ramp up and start charging from the extra energy. A
 small buffer helps avoid hunting or "chattering" around zero export.
 

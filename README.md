@@ -133,7 +133,7 @@ This setting is useful when the AFERIY system shares the same electrical system
 with an unmanaged micro-inverter or another PV source that it does not directly
 control.
 
-As soon as the system sees that you are exporting more than your set value
+As soon as your Smart Meter (usually Shelly) sees that you are exporting more than your set value
 between `0 W` and `50 W`, it tells your home batteries to ramp up and start
 charging from the extra energy.
 
