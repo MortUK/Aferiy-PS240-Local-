@@ -72,6 +72,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
       2,
       "kWh",
     );
+    const usableCapacity = this._usableCapacityKwh(attrs, breakdown);
     const postSunset = this._numberText(breakdown.post_sunset_need_kwh, 2, "kWh");
     const postAt = this._timeText(breakdown.post_sunset_start_at);
     const usefulSolar = this._timeText(attrs.solar_break_even_at, true)
@@ -201,7 +202,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
 
         <div class="explain">
           <div><b>Target:</b> ${this._escape(target)}</div>
-          <div><b>Battery capacity:</b> ${this._escape(batteryCapacity)}</div>
+          <div><b>Battery capacity:</b> ${this._escape(batteryCapacity)}${Number.isFinite(usableCapacity) ? ` - (${this._escape(this._numberText(usableCapacity, 2, "kWh"))} Usable)` : ""}</div>
           <div><b>Day balance:</b> ${this._escape(demand)} demand · ${this._escape(solar)} solar${wholeShortfall ? ` · ${this._escape(wholeShortfall)} shortfall` : ""}</div>
           <div><b>Battery reserve:</b> Pre-sunrise ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset ${this._escape(postSunset)}${postAt ? ` from ${this._escape(postAt)}` : ""}</div>
           <div><b>Useful solar:</b> ${this._escape(usefulSolar)}</div>
@@ -322,6 +323,24 @@ class AferiyOvernightPlanCard extends HTMLElement {
     }
 
     return Number.NaN;
+  }
+
+  _usableCapacityKwh(attrs, breakdown) {
+    const capacity = Number(
+      breakdown.battery_capacity_kwh
+      ?? attrs.battery_capacity_kwh,
+    );
+    const reserve = Number(
+      breakdown.reserve_soc
+      ?? attrs.reserve_soc
+      ?? breakdown.min_soc
+      ?? attrs.min_soc
+      ?? 10,
+    );
+    if (!Number.isFinite(capacity) || !Number.isFinite(reserve)) {
+      return Number.NaN;
+    }
+    return capacity * ((100 - reserve) / 100);
   }
 
   _timeText(value, includeDay = false) {
