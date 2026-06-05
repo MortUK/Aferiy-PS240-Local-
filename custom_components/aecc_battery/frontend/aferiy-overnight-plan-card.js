@@ -74,7 +74,6 @@ class AferiyOvernightPlanCard extends HTMLElement {
     );
     const usableCapacity = this._usableCapacityKwh(attrs, breakdown);
     const postSunset = this._numberText(breakdown.post_sunset_need_kwh, 2, "kWh");
-    const postAt = this._timeText(breakdown.post_sunset_start_at);
     const requiredNeed = this._numberText(
       attrs.required_ac_energy_kwh ?? breakdown.peak_window_need_kwh,
       2,
@@ -220,7 +219,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
           <div><b>Battery capacity:</b> ${this._escape(batteryCapacity)}${Number.isFinite(usableCapacity) ? ` - (${this._escape(this._numberText(usableCapacity, 2, "kWh"))} Usable)` : ""}</div>
           <div><b>Day balance:</b> ${this._escape(demand)} demand · ${this._escape(solar)} solar${wholeShortfall ? ` · ${this._escape(wholeShortfall)} shortfall` : ""}</div>
           <div><b>Battery need:</b> ${this._escape(requiredNeed)} peak deficit · ${this._escape(losses)} losses · ${this._escape(buffer)} buffer</div>
-          <div><b>Timing checks:</b> Pre-sunrise floor ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset load ${this._escape(postSunset)}${postAt ? ` from ${this._escape(postAt)}` : ""}</div>
+          <div><b>Timing checks:</b> Pre-sunrise floor ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset load ${this._escape(postSunset)}</div>
           <div><b>Useful solar:</b> ${this._escape(usefulSolar)}</div>
           <div><b>Confidence:</b> ${this._escape(confidence)} · History ${this._escape(history)}</div>
           <div><b>Smart History:</b> ${this._escape(smartHistoryText)}</div>
