@@ -90,7 +90,7 @@ def battery_capacity_preset_label(module_count: int) -> str:
     """Human-readable capacity preset label."""
     capacity = battery_capacity_for_modules(module_count)
     suffix = "module" if module_count == 1 else "modules"
-    return f"{module_count} {suffix} ({capacity:.3f} kWh)"
+    return f"{module_count} {suffix} ({capacity:.2f} kWh)"
 
 
 # ─── Sensor cleaning profile ─────────────────────────────────────────────────
@@ -158,6 +158,7 @@ REG_CONTROL_TIME2 = "3004"  # Second active time slot
 
 REG_MIN_SOC = "3023"  # Minimum discharge SOC
 REG_MAX_SOC = "3024"  # Maximum charge SOC
+REG_SURPLUS_CHARGE_TRIGGER = "3037"  # PV surplus trigger for grid-connected charging (W)
 REG_MAX_FEED_POWER = "3039"  # Max feed power in W; read/write depends on integration logic
 
 # Empty schedule slot - clears the active time slot.

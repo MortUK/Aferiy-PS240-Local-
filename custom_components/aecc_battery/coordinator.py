@@ -41,6 +41,7 @@ from .const import (
     REG_MAX_SOC,
     REG_MIN_SOC,
     REG_SCHEDULE_MODE,
+    REG_SURPLUS_CHARGE_TRIGGER,
     SLOT_DISABLED,
     OVERNIGHT_CHARGE_MODE_DISABLED,
     OVERNIGHT_CHARGE_MODE_MANUAL,
@@ -172,11 +173,21 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "mode": overnight_charging_mode,
             "reason": "Automatic overnight charging is off.",
         }
+        self._smart_history_status: dict[str, Any] = {
+            "recorder_history_status": "warming",
+            "recorder_history_valid_days": 0,
+            "recorder_history_lookback_days": 14,
+            "reason": "Usage history is warming up.",
+        }
         self._overnight_last_action: str | None = None
         self._overnight_last_action_at: datetime | None = None
         self._overnight_last_window_key: str | None = None
         self._overnight_last_restored_window_key: str | None = None
         self._overnight_scheduler_started_charge: bool = False
+        self._overnight_locked_target_soc: int | None = None
+        self._overnight_locked_target_source: str | None = None
+        self._overnight_locked_target_at: datetime | None = None
+        self._overnight_locked_target_window_key: str | None = None
         self.solar_unavailable_override: bool = False
         self._commanded_min_soc: int = 10
         self._commanded_max_soc: int = 100
@@ -184,6 +195,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.max_register_power: int = MAX_BATTERY_POWER_W if extended_power else MAX_REGISTER_POWER_DEFAULT
         self.initial_min_soc: int | None = None
         self.initial_max_soc: int | None = None
+        self.initial_surplus_charge_trigger: int | None = None
         self.initial_max_feed_power: int | None = None
         self.initial_work_mode: str | None = None
         self.initial_power: int | None = None
@@ -472,6 +484,15 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Current local overnight charging scheduler status."""
         return dict(self._overnight_status)
 
+    @property
+    def smart_history_status(self) -> dict[str, Any]:
+        """Current usage-history quality used by the SMART recommendation."""
+        return dict(self._smart_history_status)
+
+    def set_smart_history_status(self, attrs: dict[str, Any]) -> None:
+        """Expose recorder-history quality for diagnostics and dashboards."""
+        self._smart_history_status = dict(attrs)
+
     def set_overnight_charging_mode(self, mode: str) -> None:
         """Store the automatic overnight charging mode locally."""
         if mode not in (
@@ -482,6 +503,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             mode = OVERNIGHT_CHARGE_MODE_DISABLED
         self.overnight_charging_mode = mode
         if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            self._clear_overnight_locked_target()
             self._overnight_status = {
                 "state": "Off",
                 "mode": mode,
@@ -537,12 +559,61 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         now = dt_util.now()
         window = self._overnight_window(now)
-        target_soc, target_source = self._overnight_target_soc(mode)
+        live_target_soc, live_target_source = self._overnight_target_soc(mode)
+        if self._overnight_last_window_key != window["key"]:
+            self._overnight_last_window_key = window["key"]
+            self._overnight_scheduler_started_charge = False
+            self._overnight_last_action = None
+            self._clear_overnight_locked_target()
+
+        target_locked = False
+        if (
+            mode == OVERNIGHT_CHARGE_MODE_SMART
+            and window["effective_start"] <= now < window["effective_end"]
+            and live_target_soc is not None
+        ):
+            if self._overnight_locked_target_window_key != window["key"]:
+                self._overnight_locked_target_soc = live_target_soc
+                self._overnight_locked_target_source = live_target_source
+                self._overnight_locked_target_at = datetime.now(UTC)
+                self._overnight_locked_target_window_key = window["key"]
+            target_locked = True
+
+        if (
+            mode == OVERNIGHT_CHARGE_MODE_SMART
+            and self._overnight_locked_target_window_key == window["key"]
+            and self._overnight_locked_target_soc is not None
+        ):
+            target_soc = self._overnight_locked_target_soc
+            target_source = self._overnight_locked_target_source or live_target_source
+        else:
+            target_soc = live_target_soc
+            target_source = live_target_source
+
         current_soc = self._safe_float(self.get_value("average_battery_soc"))
         base_attrs = {
             "mode": mode,
             "target_source": target_source,
             "target_soc": target_soc,
+            "live_target_source": live_target_source,
+            "live_target_soc": live_target_soc,
+            "target_locked": target_locked,
+            "locked_target_soc": (
+                self._overnight_locked_target_soc
+                if self._overnight_locked_target_window_key == window["key"]
+                else None
+            ),
+            "locked_target_source": (
+                self._overnight_locked_target_source
+                if self._overnight_locked_target_window_key == window["key"]
+                else None
+            ),
+            "locked_target_at": (
+                self._overnight_locked_target_at.isoformat()
+                if self._overnight_locked_target_window_key == window["key"]
+                and self._overnight_locked_target_at
+                else None
+            ),
             "current_soc": round(current_soc, 1) if current_soc is not None else None,
             "off_peak_start": self.off_peak_start,
             "off_peak_end": self.off_peak_end,
@@ -556,11 +627,6 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._overnight_last_action_at
             else None,
         }
-
-        if self._overnight_last_window_key != window["key"]:
-            self._overnight_last_window_key = window["key"]
-            self._overnight_scheduler_started_charge = False
-            self._overnight_last_action = None
 
         if target_soc is None:
             self._set_overnight_status(
@@ -725,6 +791,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._overnight_last_action = "restore_self_gen"
             self._overnight_last_action_at = datetime.now(UTC)
             self._overnight_scheduler_started_charge = False
+            self._clear_overnight_locked_target()
             self._set_overnight_status(
                 state,
                 reason,
@@ -741,6 +808,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "The battery did not confirm the Self-Gen/Zero Export restore command.",
                 base_attrs,
             )
+
+    def _clear_overnight_locked_target(self) -> None:
+        self._overnight_locked_target_soc = None
+        self._overnight_locked_target_source = None
+        self._overnight_locked_target_at = None
+        self._overnight_locked_target_window_key = None
 
     def _set_overnight_status(
         self,
@@ -1164,6 +1237,15 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         payload = {REG_MAX_SOC: str(value)}
         return await self._logged_write(payload, f"max_soc({value}%)")
 
+    async def async_set_surplus_charge_trigger(self, value: int) -> bool:
+        """Set the PV surplus threshold that triggers grid-connected charging."""
+        trigger_w = max(0, min(int(value), 50))
+        payload = {REG_SURPLUS_CHARGE_TRIGGER: str(trigger_w)}
+        return await self._logged_write(
+            payload,
+            f"surplus_charge_trigger({trigger_w}W)",
+        )
+
     async def async_read_initial_state(self) -> None:
         resp = await self.client.get_control_parameters(
             [
@@ -1173,6 +1255,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 int(REG_AI_SMART_DISC),
                 int(REG_MIN_SOC),
                 int(REG_MAX_SOC),
+                int(REG_SURPLUS_CHARGE_TRIGGER),
                 int(REG_CUSTOM_MODE),
                 int(REG_MAX_FEED_POWER),
             ]
@@ -1206,6 +1289,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ai_charge = _int(REG_AI_SMART_CHARGE)
         ai_discharge = _int(REG_AI_SMART_DISC)
         custom_mode = _int(REG_CUSTOM_MODE)
+        surplus_charge_trigger = _int(REG_SURPLUS_CHARGE_TRIGGER)
         max_feed_power = _int(REG_MAX_FEED_POWER)
 
         if min_soc is not None:
@@ -1216,6 +1300,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.initial_max_soc = max_soc
             self._commanded_max_soc = max_soc
             _LOGGER.info("Read initial max SOC: %d%%", max_soc)
+        if surplus_charge_trigger is not None:
+            self.initial_surplus_charge_trigger = surplus_charge_trigger
+            _LOGGER.info(
+                "Read initial PV surplus charge trigger register 3037: %d W",
+                surplus_charge_trigger,
+            )
         if max_feed_power is not None:
             self.initial_max_feed_power = max_feed_power
             _LOGGER.info("Read initial max feed power register 3039: %d W", max_feed_power)

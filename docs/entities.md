@@ -8,8 +8,9 @@ Core entities focus on data and controls that come directly from the local batte
 - Battery 1 SOC, Battery 2 SOC, and further generic battery slots when exposed by the master
 - PV, AC charge, battery charge, battery discharge, grid, backup, and battery power
 - Energy charged, discharged, and generated
-- Local Operating Mode
+- Operating Mode
 - Charge Power Target and Discharge Power Target
+- PV Surplus Charge Trigger
 - Charge Limit and Discharge Limit
 - Overnight Charge, Manual SOC, Off-Peak Tariff, Off-Peak Start, and Off-Peak End
 - Solar Availability
@@ -22,11 +23,16 @@ Individual Battery N SOC entities are created from local `Storage_list` entries
 reported by the master. Restart Home Assistant or reload the integration after
 adding, removing, or replacing a battery/inverter so the entity list is rebuilt.
 
-`Local Operating Mode` is the last mode commanded through this local
+`Operating Mode` is the last mode commanded through this local
 integration. If the AEC Cloud app changes the system, the selector may not
 reflect that external action. Use Battery Status, power sensors, Last Command
 Result, and control-register snapshots when comparing local behaviour with app
 or cloud-originated changes.
+
+`PV Surplus Charge Trigger` writes local register `3037`, matching the AEC Cloud
+app's `Trigger Charging and Grid-connected Power` setting. It can help systems
+with unmanaged microinverters decide when small surplus/export should trigger
+battery charging. The slider follows the app range of `0 W` to `50 W`.
 
 ## Diagnostic Entities
 
@@ -61,13 +67,14 @@ The calculation can use:
 - A weighted 14-day household energy-use profile from Home Assistant history
 - Solar forecast data, ideally from Solcast
 - The expected Pre-Sunrise Need before solar generation is useful
+- The expected Post-Sunset Need after useful solar falls away and before off-peak starts
 - Home occupancy from `zone.home`, so empty-house days can be treated separately from normal household demand
 - Battery discharge and grid charge efficiency allowances
 - A dynamic buffer and confidence adjustment that increase when forecast or demand history is less certain
 
 Pre-Sunrise Need is the estimated energy needed after the cheap-rate window ends and before sustained forecast solar should cover house demand. Weak early-morning forecast solar is only given partial credit until sustained useful solar is expected. If the forecast never reaches sustained useful solar, part of the day forecast is still credited so low winter solar can reduce the target instead of forcing 100%. If Solar Availability is set to Solar Unavailable, the calculation treats forecast solar as 0 kWh and reports Batteries Only. The recommended target percentage is calculated from that kWh need, the configured battery capacity, the wider peak-rate window, recent use, expected solar, efficiency losses, a dynamic buffer, and a confidence adjustment. It is then kept within practical SOC limits.
 
-Useful attributes include `target_breakdown_summary`, `recommendation_reason`, `pre_sunrise_need_kwh`, `pre_sunrise_net_need_kwh`, `pre_sunrise_credited_solar_kwh`, `no_useful_solar_forecast`, `solar_credit_mode`, `solar_unavailable_override`, `solar_override_status`, `solar_break_even_at`, `recorder_history_weighting`, `recorder_history_daily_averages`, `forecast_confidence`, `stale_data_guard_active`, `dynamic_buffer_soc`, `battery_loss_allowance_kwh`, `estimated_grid_charge_energy_to_target_kwh`, and `target_jump_guard`.
+Useful attributes include `target_breakdown_summary`, `recommendation_reason`, `pre_sunrise_need_kwh`, `post_sunset_need_kwh`, `whole_day_net_shortfall_kwh`, `pre_sunrise_net_need_kwh`, `pre_sunrise_credited_solar_kwh`, `no_useful_solar_forecast`, `solar_credit_mode`, `solar_unavailable_override`, `solar_override_status`, `solar_break_even_at`, `recorder_history_weighting`, `recorder_history_daily_averages`, `forecast_confidence`, `stale_data_guard_active`, `dynamic_buffer_soc`, `battery_loss_allowance_kwh`, `estimated_grid_charge_energy_to_target_kwh`, and `target_jump_guard`.
 
 For best results, configure the battery capacity correctly, keep Home Assistant recorder history available, and provide Solcast forecast sensors. Without enough data the sensor may use conservative defaults or show that it cannot calculate a reliable target.
 

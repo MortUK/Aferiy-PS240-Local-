@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.2
+
+- Added PV Surplus Charge Trigger as a local `0-50 W` control for systems with unmanaged microinverters or other PV sources on the same electrical system.
+- Improved Recommended Overnight SOC so whole-day demand versus solar shortfall is considered before using the morning-bridge-only target path.
+- Added Post-Sunset Need and whole-day net shortfall attributes to explain the battery reserve needed between useful solar ending and the next off-peak window.
+- Added SMART History visibility for the 14-day household usage picture used by overnight recommendations.
+- Locked the automatic overnight SMART target at the start of the active off-peak window so recalculations after midnight do not move the charging target mid-window.
+- Rounded Battery Capacity preset labels to two decimal places and renamed Local Operating Mode to Operating Mode.
+- Updated the README hero graphic and documented the local PV surplus trigger behaviour.
+
 ## 1.6.1
 
 - Returned individual Battery N SOC identification to the master-reported local `Storage_list`.

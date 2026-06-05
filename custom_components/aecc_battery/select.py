@@ -114,7 +114,7 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
 
     _attr_icon = "mdi:battery-sync"
     _attr_has_entity_name = True
-    _attr_name = "Local Operating Mode"
+    _attr_name = "Operating Mode"
     _attr_options = OPERATING_MODE_OPTIONS
 
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:

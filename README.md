@@ -1,9 +1,9 @@
 # AFERIY PS240 (Local)
 
-![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.png)
+![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.jpeg)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.6.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.6.2-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 
@@ -19,6 +19,7 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Local-first automatic overnight charging with smart or manual SOC targets
 - Charge and discharge SOC limits
 - Charge/discharge power targets from 800 W to 1200 W for cautious PS240 testing
+- PV surplus charge trigger for systems with unmanaged microinverters
 - Physics-aware filtering for occasional invalid SOC/power readings
 - Home Assistant diagnostics export support
 - Custom AFERIY PS240 icon
@@ -109,6 +110,10 @@ Recommended Overnight SOC helps users with cheap overnight electricity charge on
 - Applies a safer minimum SOC if Solcast or demand history is stale or missing.
 - Exposes a plain-English target breakdown so dashboards can show why the target was chosen.
 
+The overnight target also tracks the whole-day demand versus solar forecast and
+the Post-Sunset Need, so the battery target can keep enough reserve after solar
+falls away to reach the next cheap-rate window without unnecessary peak import.
+
 Local schedule-slot registers mirrored from the AEC Cloud app were tested and
 behaved as immediate commands on the PS240, so they are not exposed as normal
 controls. The integration-owned scheduler instead performs the timing in Home
@@ -121,6 +126,29 @@ The PS240 can clip or hold back surplus PV when the battery is full or when the 
 Bypassing this PV clipping has been possible in testing, but the mode switching became unreliable. The current self-consumption switching is deliberately conservative because it reliably returns the battery to a safe local operating mode after charging or idling.
 
 At the moment, bypassing clipping/export reliably is not supported by this integration. It may become possible in the future, but it may also need a firmware or app/API update from AFERIY before it can be made stable.
+
+### PV Surplus Charge Trigger
+
+`PV Surplus Charge Trigger` mirrors the AEC Cloud app setting labelled
+`Trigger Charging and Grid-connected Power`. It writes local register `3037`
+and is exposed as a cautious `0 W` to `50 W` slider, matching the app range.
+
+This setting is useful when the PS240 system shares the same electrical system
+with an unmanaged microinverter or another PV source that the AFERIY unit does
+not directly control. In that situation the battery may see small amounts of
+grid export and decide whether to start charging from that surplus.
+
+In plain English:
+
+- A lower value tells the battery to react quickly to small surplus/export.
+- A higher value gives the system a little more tolerance before it starts
+  charging, which may make it less twitchy if you only export a small amount
+  for a few moments.
+- It is not an export limit and it does not enable export mode. It is a trigger
+  threshold that helps guide when the battery should absorb surplus power.
+
+The app limits this setting to `50 W`, so the integration keeps the same safe
+range until higher values are proven stable on real hardware.
 
 ## Output Limit Notes
 

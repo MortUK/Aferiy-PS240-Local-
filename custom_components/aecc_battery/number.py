@@ -42,6 +42,7 @@ async def async_setup_entry(
         [
             AeccChargePowerSlider(coordinator, config_entry),
             AeccDischargePowerSlider(coordinator, config_entry),
+            AeccPvSurplusChargeTrigger(coordinator, config_entry),
             AeccManualOvernightChargeTarget(coordinator, config_entry),
             AeccMinSoc(coordinator, config_entry),
             AeccMaxSoc(coordinator, config_entry),
@@ -177,6 +178,81 @@ class AeccDischargePowerSlider(AeccPassivePowerSlider):
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry)
         self._attr_unique_id = f"{config_entry.entry_id}_discharge_power_target"
+
+
+class AeccPvSurplusChargeTrigger(
+    CoordinatorEntity[AeccBatteryCoordinator],
+    NumberEntity,
+    RestoreEntity,
+):
+    """PV surplus threshold that triggers grid-connected battery charging."""
+
+    _attr_has_entity_name = True
+    _attr_name = "PV Surplus Charge Trigger"
+    _attr_icon = "mdi:solar-power-variant"
+    _attr_device_class = NumberDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_native_min_value = 0
+    _attr_native_max_value = 50
+    _attr_native_step = 1
+    _attr_mode = NumberMode.SLIDER
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_pv_surplus_charge_trigger"
+        initial = coordinator.initial_surplus_charge_trigger
+        self._commanded: float = float(initial if initial is not None else 50)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous value only if the device did not report one."""
+        await super().async_added_to_hass()
+
+        if self.coordinator.initial_surplus_charge_trigger is not None:
+            self._commanded = self.coordinator.initial_surplus_charge_trigger
+            return
+
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+
+        try:
+            restored = float(last_state.state)
+        except (TypeError, ValueError):
+            return
+
+        self._commanded = _clamp_number(
+            restored,
+            float(self._attr_native_min_value),
+            float(self._attr_native_max_value),
+        )
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> float:
+        return self._commanded
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    async def async_set_native_value(self, value: float) -> None:
+        trigger_w = int(
+            _clamp_number(
+                float(value),
+                float(self._attr_native_min_value),
+                float(self._attr_native_max_value),
+            )
+        )
+        success = await self.coordinator.async_set_surplus_charge_trigger(trigger_w)
+        if success:
+            self._commanded = trigger_w
+            self.async_write_ha_state()
+        else:
+            _LOGGER.warning("Failed to set PV surplus charge trigger to %s W", trigger_w)
 
 
 class AeccBatteryCapacity(CoordinatorEntity[AeccBatteryCoordinator], NumberEntity, RestoreEntity):
