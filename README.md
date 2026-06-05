@@ -129,26 +129,17 @@ At the moment, bypassing clipping/export reliably is not supported by this integ
 
 ### PV Surplus Charge Trigger
 
-`PV Surplus Charge Trigger` mirrors the AEC Cloud app setting labelled
-`Trigger Charging and Grid-connected Power`. It writes local register `3037`
-and is exposed as a cautious `0 W` to `50 W` slider, matching the app range.
+This setting is useful when the AFERIY system shares the same electrical system
+with an unmanaged micro-inverter or another PV source that it does not directly
+control.
 
-This setting is useful when the PS240 system shares the same electrical system
-with an unmanaged microinverter or another PV source that the AFERIY unit does
-not directly control. In that situation the battery may see small amounts of
-grid export and decide whether to start charging from that surplus.
+As soon as the system sees that you are exporting more than your set value
+between `0 W` and `50 W`, it tells your home batteries to ramp up and start
+charging from the extra energy.
 
-In plain English:
-
-- A lower value tells the battery to react quickly to small surplus/export.
-- A higher value gives the system a little more tolerance before it starts
-  charging, which may make it less twitchy if you only export a small amount
-  for a few moments.
-- It is not an export limit and it does not enable export mode. It is a trigger
-  threshold that helps guide when the battery should absorb surplus power.
-
-The app limits this setting to `50 W`, so the integration keeps the same safe
-range until higher values are proven stable on real hardware.
+Having a small buffer gives the system a stable threshold to trigger clean,
+sustained battery charging without constantly hunting or "chattering" around
+zero.
 
 ## Output Limit Notes
 

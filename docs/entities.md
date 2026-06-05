@@ -29,10 +29,11 @@ reflect that external action. Use Battery Status, power sensors, Last Command
 Result, and control-register snapshots when comparing local behaviour with app
 or cloud-originated changes.
 
-`PV Surplus Charge Trigger` writes local register `3037`, matching the AEC Cloud
-app's `Trigger Charging and Grid-connected Power` setting. It can help systems
-with unmanaged microinverters decide when small surplus/export should trigger
-battery charging. The slider follows the app range of `0 W` to `50 W`.
+`PV Surplus Charge Trigger` is useful when the AFERIY system shares the same
+electrical system with an unmanaged micro-inverter or another PV source that it
+does not directly control. When export rises above the chosen `0 W` to `50 W`
+threshold, the batteries ramp up and start charging from the extra energy. A
+small buffer helps avoid hunting or "chattering" around zero export.
 
 ## Diagnostic Entities
 
