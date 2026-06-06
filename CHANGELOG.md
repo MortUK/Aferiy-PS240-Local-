@@ -4,6 +4,15 @@
 
 - No unreleased changes.
 
+## 1.6.3
+
+- Added SMART Overnight Accuracy as a diagnostic sensor to review the last completed SMART overnight cycle against the configured minimum SOC plus planned buffer.
+- Improved AC Charging Power cleanup so stale AC charge readings are suppressed when PV already explains the observed battery charging.
+- Changed SMART history projections to exclude the current in-progress day from the 14-day demand profile.
+- Improved the bundled Overnight Plan card so Overnight Status and Tariff update from the local integration entities instead of stale dashboard helpers.
+- Rewrote the SMART Overnight Charging README section in plainer language and added an important Solcast setup note.
+- Documented the PV Surplus Charge Trigger for unmanaged microinverters or other PV sources sharing the same smart meter.
+
 ## 1.6.2
 
 - Added a bundled AFERIY Overnight Plan Lovelace card with card-picker registration and README setup instructions.

@@ -85,35 +85,60 @@ The external helper checkboxes are reminders for installers. They do not install
 
 ### Smart Overnight Charging
 
-Automatic Overnight Charging is disabled by default and runs entirely through the local TCP connection when enabled:
+Automatic Overnight Charging is designed for homes with a cheap overnight
+tariff. The aim is simple: charge enough overnight to avoid expensive daytime
+import, but leave room for free solar the next day.
 
-- **On** charges to Recommended Overnight SOC.
-- **Manual** charges to the Manual SOC setting.
+It runs locally through the PS240 TCP connection. No Octopus or cloud trigger is
+required.
+
+- **On** uses the calculated Recommended Overnight SOC.
+- **Manual** uses the Manual SOC slider.
 - **Off** leaves overnight charging disabled.
-- Starts one minute after the configured off-peak start to avoid peak-rate overlap.
-- Monitors System Average Battery SOC throughout the window and starts charging if SOC falls to or below the target.
-- Holds the battery at the target after charging begins.
-- Restores Self-Gen/Zero Export five minutes before off-peak ends because the PS240 can take several minutes to change power source.
+- Starts one minute after the configured off-peak start time.
+- Watches System Average Battery SOC during the cheap-rate window.
+- Starts charging if SOC falls to or below the target.
+- Holds/pauses once the target is reached.
+- Restores Self-Gen/Zero Export five minutes before off-peak ends, because the
+  PS240 can take a few minutes to move cleanly from grid charging back to normal
+  battery behaviour.
 
-Recommended Overnight SOC helps users with cheap overnight electricity charge only what they are likely to need before the next off-peak window, using tomorrow's solar forecast to reduce unnecessary grid charging.
+Recommended Overnight SOC is calculated from:
 
-- Uses the configured battery capacity and reserve/minimum SOC.
-- Learns a weighted 14-day time-of-day house demand profile from Home Assistant history.
-- Ignores mostly empty-house days using `zone.home` occupancy.
-- Weights recent days more strongly and gives matching weekdays a small boost.
-- Subtracts AFERIY AC charging from daily fallback demand.
-- Uses Solcast, preferably timed forecast data, instead of previous clipped solar output.
-- Estimates Pre-Sunrise Need from the off-peak end until sustained forecast solar should cover house demand.
-- Gives weak early-morning forecast solar partial credit until sustained useful solar is expected.
-- On low-solar days with no useful solar handover, still credits part of the forecast solar before converting the remaining kWh need into a battery-size-aware SOC target.
-- Includes a Solar Availability dropdown; Solar Unavailable treats forecast solar as 0 kWh and shows Batteries Only status.
-- Adds battery loss, grid charge loss, a dynamic buffer, and a forecast confidence adjustment.
-- Applies a safer minimum SOC if Solcast or demand history is stale or missing.
-- Exposes a plain-English target breakdown so dashboards can show why the target was chosen.
+- **Battery capacity** and the configured minimum discharge SOC, so unusable
+  reserve is not counted as available energy.
+- **House demand history**, using a weighted 14-day time-of-day profile from
+  Home Assistant recorder.
+- **Normal occupied-house use**, with `zone.home` used to avoid treating
+  empty-house days as normal demand.
+- **Tomorrow's Solcast forecast**, preferably the timed forecast file rather
+  than yesterday's clipped production.
+- **Whole-day balance**, comparing expected house demand with expected solar
+  before the next off-peak window.
+- **Pre-Sunrise Need**, covering the period after off-peak ends and before solar
+  is expected to be useful.
+- **Post-Sunset Need**, keeping enough reserve after useful solar falls away to
+  reach the next cheap-rate window.
+- **AFERIY AC charging**, which is subtracted from demand history so overnight
+  grid charging is not counted as normal house use.
+- **A small buffer and confidence adjustment**, so stale forecast data or weak
+  demand history makes the target safer rather than optimistic.
 
-The overnight target also tracks the whole-day demand versus solar forecast and
-the Post-Sunset Need, so the battery target can keep enough reserve after solar
-falls away to reach the next cheap-rate window without unnecessary peak import.
+The integration also includes a **Solar Availability** dropdown. Set it to Solar
+Unavailable when panels are covered, disconnected, or otherwise unable to
+generate. The overnight calculation will then treat the solar forecast as 0 kWh
+and show Batteries Only status.
+
+#### Important Solcast Setup
+
+When setting up Solcast, **do not set the AC inverter output to 800 W per unit**.
+
+The batteries are capable of charging much faster than this and are rated to
+**2.4 kW**.
+
+If this is set too low, Solcast can under-estimate solar production. That can
+make the overnight recommendation too high and charge the batteries more than
+needed.
 
 ### Dashboard Card
 

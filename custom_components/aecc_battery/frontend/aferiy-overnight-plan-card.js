@@ -47,7 +47,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
     const plannedNeed = this._plannedNeedKwh(recommended, attrs, breakdown);
     const needed = this._numberText(plannedNeed, 3, "kWh");
     const status = this._cleanText(overnightStatus?.state, "Waiting for off-peak");
-    const tariff = this._tariffLabel(hass);
+    const tariff = this._tariffLabel(hass, attrs);
     const solarMode = this._solarMode(solarAvailability, attrs);
     const demand = this._numberText(
       breakdown.projected_house_demand_kwh,
@@ -235,21 +235,22 @@ class AferiyOvernightPlanCard extends HTMLElement {
       return states[configuredEntity];
     }
 
-    const exact = `${domain}.aferiy_ps240_local${suffix}`;
-    if (states[exact] && this._isKnown(states[exact].state)) {
-      return states[exact];
+    const candidates = [
+      `${domain}.aferiy_ps240_local${suffix}`,
+      `${domain}.garage_aferiy_ps240_local${suffix}`,
+      ...Object.keys(states)
+        .filter((entityId) => entityId.startsWith(`${domain}.`) && entityId.endsWith(suffix))
+        .sort((left, right) => this._entityPriority(right) - this._entityPriority(left)),
+    ];
+
+    for (const entityId of [...new Set(candidates)]) {
+      const state = states[entityId];
+      if (state && this._isKnown(state.state)) {
+        return state;
+      }
     }
 
-    const garage = `${domain}.garage_aferiy_ps240_local${suffix}`;
-    if (states[garage] && this._isKnown(states[garage].state)) {
-      return states[garage];
-    }
-
-    return Object.values(states).find((state) => (
-      state.entity_id.startsWith(`${domain}.`)
-      && state.entity_id.endsWith(suffix)
-      && this._isKnown(state.state)
-    ));
+    return undefined;
   }
 
   _tile(icon, primary, secondary, color) {
@@ -262,20 +263,80 @@ class AferiyOvernightPlanCard extends HTMLElement {
     `;
   }
 
-  _tariffLabel(hass) {
-    const offPeak = Object.values(hass.states).find((state) => (
-      state.entity_id.endsWith("_off_peak") && state.state === "on"
-    ));
-    if (offPeak) {
-      return "Off-Peak";
+  _entityPriority(entityId) {
+    if (entityId.includes("aferiy_ps240_local")) {
+      return 3;
     }
+    if (entityId.includes("aecc_battery")) {
+      return 2;
+    }
+    if (entityId.includes("garage_aferiy")) {
+      return 1;
+    }
+    return 0;
+  }
 
+  _tariffLabel(hass, attrs = {}) {
     const free = Object.values(hass.states).find((state) => (
       state.entity_id.includes("octopus")
       && state.entity_id.includes("free")
       && state.state === "on"
     ));
-    return free ? "Free" : "Peak";
+    if (free) {
+      return "Free";
+    }
+
+    const start = this._timeEntityMinutes(hass, "_off_peak_start")
+      ?? this._timeAttrMinutes(attrs.off_peak_start);
+    const end = this._timeEntityMinutes(hass, "_off_peak_end")
+      ?? this._timeAttrMinutes(attrs.off_peak_end);
+    if (Number.isFinite(start) && Number.isFinite(end) && this._isNowInWindow(start, end)) {
+      return "Off-Peak";
+    }
+
+    return "Peak";
+  }
+
+  _timeEntityMinutes(hass, suffix) {
+    const states = hass?.states || {};
+    const candidates = Object.values(states)
+      .filter((state) => state.entity_id.startsWith("time.") && state.entity_id.endsWith(suffix))
+      .sort((left, right) => this._entityPriority(right.entity_id) - this._entityPriority(left.entity_id));
+    for (const state of candidates) {
+      const minutes = this._timeAttrMinutes(state.state);
+      if (Number.isFinite(minutes)) {
+        return minutes;
+      }
+    }
+    return undefined;
+  }
+
+  _timeAttrMinutes(value) {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const match = value.match(/(\d{1,2}):(\d{2})/);
+    if (!match) {
+      return undefined;
+    }
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours > 23 || minutes > 59) {
+      return undefined;
+    }
+    return (hours * 60) + minutes;
+  }
+
+  _isNowInWindow(start, end) {
+    const now = new Date();
+    const current = (now.getHours() * 60) + now.getMinutes();
+    if (start === end) {
+      return false;
+    }
+    if (start < end) {
+      return current >= start && current < end;
+    }
+    return current >= start || current < end;
   }
 
   _solarMode(solarAvailability, attrs) {

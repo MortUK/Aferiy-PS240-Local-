@@ -45,7 +45,13 @@ Diagnostic entities are intended for troubleshooting rather than dashboards:
 - Firmware Version
 - Grid Meter Agreement
 - Charging Reason
+- SMART Overnight Accuracy
 - Selected raw or derived diagnostic readings
+
+`SMART Overnight Accuracy` reviews the last completed SMART overnight cycle.
+Its signed percentage shows how much SOC was left above or below the planned
+reserve floor when the next off-peak window started. A positive value means the
+target was probably higher than needed; a negative value means it was too low.
 
 ## Energy Estimate Sensors
 
@@ -78,6 +84,17 @@ Pre-Sunrise Need is the estimated energy needed after the cheap-rate window ends
 Useful attributes include `target_breakdown_summary`, `recommendation_reason`, `pre_sunrise_need_kwh`, `post_sunset_need_kwh`, `whole_day_net_shortfall_kwh`, `pre_sunrise_net_need_kwh`, `pre_sunrise_credited_solar_kwh`, `no_useful_solar_forecast`, `solar_credit_mode`, `solar_unavailable_override`, `solar_override_status`, `solar_break_even_at`, `recorder_history_weighting`, `recorder_history_daily_averages`, `forecast_confidence`, `stale_data_guard_active`, `dynamic_buffer_soc`, `battery_loss_allowance_kwh`, `estimated_grid_charge_energy_to_target_kwh`, and `target_jump_guard`.
 
 For best results, configure the battery capacity correctly, keep Home Assistant recorder history available, and provide Solcast forecast sensors. Without enough data the sensor may use conservative defaults or show that it cannot calculate a reliable target.
+
+### Solcast Setup Note
+
+When setting up Solcast, **do not set the AC inverter output to 800 W per unit**.
+
+The batteries are capable of charging much faster than this and are rated to
+**2.4 kW**.
+
+If this is set too low, Solcast can under-estimate solar production. That can
+make the overnight recommendation too high and charge the batteries more than
+needed.
 
 ## Local Overnight Scheduling
 

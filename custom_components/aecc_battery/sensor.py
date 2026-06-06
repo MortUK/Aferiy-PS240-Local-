@@ -328,6 +328,7 @@ async def async_setup_entry(
     entities.append(AeccChargingReasonSensor(coordinator, config_entry))
     entities.append(AeccAutomaticOvernightChargingStatusSensor(coordinator, config_entry))
     entities.append(AeccSmartHistorySensor(coordinator, config_entry))
+    entities.append(AeccSmartOvernightAccuracySensor(coordinator, config_entry))
 
     entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
     entities.append(AeccHouseDemandEnergySensor(coordinator, config_entry))
@@ -1172,6 +1173,42 @@ class AeccSmartHistorySensor(
                 "If source data is unavailable, valid days age out of the 14-day window."
             ),
         }
+
+
+class AeccSmartOvernightAccuracySensor(
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
+    """Last completed SMART overnight charge accuracy review."""
+
+    _attr_has_entity_name = True
+    _attr_name = "SMART Overnight Accuracy"
+    _attr_icon = "mdi:target-variant"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_smart_overnight_accuracy"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> float | None:
+        value = self.coordinator.overnight_accuracy_status.get("state")
+        return _as_float(value)
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self.coordinator.overnight_accuracy_status)
 
 
 class AeccBatteryStatusSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
@@ -2074,7 +2111,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
             local_now = now.astimezone()
             self._recorder_profile_start = now
 
-            for days_ago in range(1, _RUNTIME_RECORDER_HISTORY_DAYS + 1):
+            for days_ago in range(2, _RUNTIME_RECORDER_HISTORY_DAYS + 2):
                 window_start_local = local_now - timedelta(days=days_ago)
                 window_end_local = window_start_local + _RUNTIME_PROFILE_HORIZON
                 start = window_start_local.astimezone(UTC)
@@ -2212,6 +2249,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordin
                     "recorder_history_interval_minutes": round(_RUNTIME_PROFILE_INTERVAL.total_seconds() / 60, 1),
                     "recorder_history_valid_days": len(daily_averages),
                     "recorder_history_weighting": "recency_decay_with_same_weekday_boost",
+                    "recorder_history_excludes_current_day": True,
                     "recorder_history_recency_decay": _RUNTIME_RECORDER_RECENCY_DECAY,
                     "recorder_history_min_day_weight": _RUNTIME_RECORDER_MIN_DAY_WEIGHT,
                     "recorder_history_same_weekday_boost": _RUNTIME_RECORDER_SAME_WEEKDAY_BOOST,
@@ -3004,7 +3042,20 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         start, end = self._next_peak_window(now)
         off_peak_start, off_peak_end, tariff_preset = self._off_peak_window_options()
         fallback_daily_kwh, fallback_attrs = self._fallback_daily_demand_kwh()
-        fallback_demand_w = fallback_daily_kwh * 1000 / 24
+        fallback_projection_daily_kwh = (
+            _as_float(fallback_attrs.get("daily_demand_floor_kwh"), fallback_daily_kwh)
+            or fallback_daily_kwh
+        )
+        fallback_demand_w = fallback_projection_daily_kwh * 1000 / 24
+        peak_window_hours = max(0.0, (end - start).total_seconds() / 3600)
+        fallback_attrs.update(
+            {
+                "fallback_projection_daily_demand_kwh": round(fallback_projection_daily_kwh, 3),
+                "fallback_projection_peak_window_kwh": round(fallback_demand_w * peak_window_hours / 1000, 3),
+                "fallback_projection_peak_window_hours": round(peak_window_hours, 2),
+                "fallback_projection_source": "daily_floor_excluding_current_day_meter",
+            }
+        )
         recorder_history_attrs = self._current_recorder_history_attrs(now)
         solar_unavailable = self._solar_unavailable_override()
         solar_unavailable_entity = self._solar_availability_entity_id()

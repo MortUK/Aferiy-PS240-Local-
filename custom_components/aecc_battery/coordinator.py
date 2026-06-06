@@ -188,6 +188,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overnight_locked_target_source: str | None = None
         self._overnight_locked_target_at: datetime | None = None
         self._overnight_locked_target_window_key: str | None = None
+        self._overnight_locked_target_context: dict[str, Any] = {}
+        self._overnight_last_completed_plan: dict[str, Any] | None = None
+        self._overnight_accuracy_recorded_window_key: str | None = None
+        self._overnight_accuracy_status: dict[str, Any] = {
+            "state": None,
+            "result": "waiting",
+            "reason": "Waiting for a completed SMART overnight cycle.",
+        }
         self.solar_unavailable_override: bool = False
         self._commanded_min_soc: int = 10
         self._commanded_max_soc: int = 100
@@ -372,6 +380,58 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def summary_val(self, key: str, default: Any = None) -> Any:
         return self.summary.get(key, default)
 
+    def _scaled_field_value(self, source: str, field: str, scale: float) -> float | None:
+        container = self.storage if source == "storage" else self.summary
+        val = container.get(field)
+        if val is None:
+            return None
+        try:
+            return round(float(val) * scale, 1)
+        except (TypeError, ValueError):
+            return None
+
+    def _first_field_value(self, fields: list[tuple[str, str, float]]) -> float | None:
+        for source, field, scale in fields:
+            val = self._scaled_field_value(source, field, scale)
+            if val is not None:
+                return val
+        return None
+
+    def _derived_ac_charging_power(self) -> float | None:
+        """Return AC charging power with stale summary values suppressed.
+
+        Some AECC firmwares leave ``TotalACChargePower`` at a small non-zero
+        value after overnight charging has ended. When live PV already explains
+        the observed battery charging, treating that stale value as real AC
+        charge pollutes house-demand and energy estimates.
+        """
+        raw_ac = self._first_field_value(_FIELD_MAP["ac_charging_power"])
+        total_charge = self._first_field_value(_FIELD_MAP["total_charge_power"])
+        pv_power = self._first_field_value(_FIELD_MAP["pv_power"])
+        pv_charge = self._first_field_value(_FIELD_MAP["pv_charging_power"])
+        pv_available = max(pv_power or 0.0, pv_charge or 0.0)
+
+        if total_charge is not None and total_charge <= 0:
+            return 0.0
+
+        if raw_ac is not None and raw_ac <= 0:
+            return 0.0
+
+        if total_charge is None:
+            return raw_ac
+
+        # If PV is already greater than, or close to, the total battery charge,
+        # any small AC-charge value is almost certainly stale.
+        margin_w = 25.0
+        if pv_available > 0 and total_charge <= pv_available + margin_w:
+            return 0.0
+
+        pv_gap = max(total_charge - pv_available, 0.0)
+        if raw_ac is None:
+            return round(pv_gap, 1) if pv_gap > margin_w else 0.0
+
+        return round(min(raw_ac, pv_gap), 1) if pv_gap > margin_w else 0.0
+
     def _wall_power_signal_w(self) -> float | None:
         """Best-effort wall-side power magnitude for cleaner physics checks.
 
@@ -424,19 +484,18 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None
 
     def get_value(self, canonical_key: str, default: Any = None) -> Any:
+        if canonical_key == "ac_charging_power":
+            raw_value = self._derived_ac_charging_power()
+            return default if raw_value is None else raw_value
+
         entries = _FIELD_MAP.get(canonical_key)
         if not entries:
             return default
         raw_value: float | None = None
         for source, field, scale in entries:
-            container = self.storage if source == "storage" else self.summary
-            val = container.get(field)
-            if val is not None:
-                try:
-                    raw_value = round(float(val) * scale, 1)
-                    break
-                except (TypeError, ValueError):
-                    continue
+            raw_value = self._scaled_field_value(source, field, scale)
+            if raw_value is not None:
+                break
         if raw_value is None:
             return default
 
@@ -488,6 +547,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def smart_history_status(self) -> dict[str, Any]:
         """Current usage-history quality used by the SMART recommendation."""
         return dict(self._smart_history_status)
+
+    @property
+    def overnight_accuracy_status(self) -> dict[str, Any]:
+        """Last completed SMART overnight charge accuracy review."""
+        return dict(self._overnight_accuracy_status)
 
     def set_smart_history_status(self, attrs: dict[str, Any]) -> None:
         """Expose recorder-history quality for diagnostics and dashboards."""
@@ -560,6 +624,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = dt_util.now()
         window = self._overnight_window(now)
         live_target_soc, live_target_source = self._overnight_target_soc(mode)
+        self._record_overnight_accuracy_if_due(now, window)
         if self._overnight_last_window_key != window["key"]:
             self._overnight_last_window_key = window["key"]
             self._overnight_scheduler_started_charge = False
@@ -577,6 +642,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._overnight_locked_target_source = live_target_source
                 self._overnight_locked_target_at = datetime.now(UTC)
                 self._overnight_locked_target_window_key = window["key"]
+                self._overnight_locked_target_context = (
+                    self._snapshot_overnight_target_context()
+                )
             target_locked = True
 
         if (
@@ -810,10 +878,172 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
     def _clear_overnight_locked_target(self) -> None:
+        self._remember_overnight_plan()
         self._overnight_locked_target_soc = None
         self._overnight_locked_target_source = None
         self._overnight_locked_target_at = None
         self._overnight_locked_target_window_key = None
+        self._overnight_locked_target_context = {}
+
+    def _remember_overnight_plan(self) -> None:
+        if (
+            self._overnight_locked_target_soc is None
+            or self._overnight_locked_target_window_key is None
+        ):
+            return
+        self._overnight_last_completed_plan = {
+            "window_key": self._overnight_locked_target_window_key,
+            "target_soc": self._overnight_locked_target_soc,
+            "target_source": self._overnight_locked_target_source,
+            "locked_at": self._overnight_locked_target_at.isoformat()
+            if self._overnight_locked_target_at
+            else None,
+            **self._overnight_locked_target_context,
+        }
+
+    def _snapshot_overnight_target_context(self) -> dict[str, Any]:
+        state = self.hass.states.get(self._recommended_overnight_soc_entity_id())
+        if state is None:
+            return {}
+
+        attrs = dict(state.attributes)
+        breakdown = attrs.get("target_breakdown")
+        if not isinstance(breakdown, dict):
+            breakdown = {}
+
+        keys = (
+            "battery_capacity_kwh",
+            "projected_house_demand_kwh",
+            "projected_solar_kwh",
+            "whole_day_net_shortfall_kwh",
+            "pre_sunrise_need_kwh",
+            "post_sunset_need_kwh",
+            "peak_window_need_kwh",
+            "battery_energy_before_buffer_kwh",
+            "dynamic_buffer_soc",
+            "confidence_mode",
+            "estimated_grid_charge_energy_to_target_kwh",
+            "useful_solar_start_at",
+            "solar_credit_mode",
+            "solar_unavailable_override",
+        )
+        context = {
+            key: breakdown.get(key, attrs.get(key))
+            for key in keys
+            if breakdown.get(key, attrs.get(key)) is not None
+        }
+        context["why_target"] = attrs.get("why_target")
+        context["recommendation_reason"] = attrs.get("recommendation_reason")
+        return context
+
+    def _record_overnight_accuracy_if_due(
+        self,
+        now: datetime,
+        window: dict[str, Any],
+    ) -> None:
+        plan = self._overnight_last_completed_plan
+        if (
+            not plan
+            and self._overnight_locked_target_soc is not None
+            and self._overnight_locked_target_window_key is not None
+            and self._overnight_locked_target_window_key != window["key"]
+        ):
+            plan = {
+                "window_key": self._overnight_locked_target_window_key,
+                "target_soc": self._overnight_locked_target_soc,
+                "target_source": self._overnight_locked_target_source,
+                "locked_at": self._overnight_locked_target_at.isoformat()
+                if self._overnight_locked_target_at
+                else None,
+                **self._overnight_locked_target_context,
+            }
+        if not plan:
+            return
+
+        previous_window_key = plan.get("window_key")
+        if (
+            not previous_window_key
+            or previous_window_key == window["key"]
+            or self._overnight_accuracy_recorded_window_key == previous_window_key
+            or now < window["effective_start"]
+        ):
+            return
+
+        current_soc = self._safe_float(self.get_value("average_battery_soc"))
+        if current_soc is None:
+            self._overnight_accuracy_status = {
+                "state": None,
+                "result": "waiting",
+                "reason": "Waiting for System Average Battery SOC to review the last overnight plan.",
+                "previous_window_key": previous_window_key,
+                "next_window_key": window["key"],
+            }
+            return
+
+        minimum_soc = int(self._commanded_min_soc)
+        buffer_soc = self._safe_float(plan.get("dynamic_buffer_soc")) or 0.0
+        reserve_floor_soc = round(min(100.0, minimum_soc + buffer_soc), 1)
+        spare_soc = round(current_soc - reserve_floor_soc, 1)
+        tolerance_soc = 2.0
+        if spare_soc > tolerance_soc:
+            result = "too_high"
+            reason = (
+                f"Battery had {spare_soc:.1f}% spare above the {reserve_floor_soc:g}% planned reserve "
+                "when the next off-peak window started."
+            )
+        elif spare_soc < -tolerance_soc:
+            result = "too_low"
+            reason = (
+                f"Battery was {abs(spare_soc):.1f}% below the {reserve_floor_soc:g}% planned reserve "
+                "when the next off-peak window started."
+            )
+        else:
+            result = "about_right"
+            reason = (
+                f"Battery finished within {tolerance_soc:.0f}% of the {reserve_floor_soc:g}% planned reserve "
+                "when the next off-peak window started."
+            )
+
+        minutes_after_start = round((now - window["effective_start"]).total_seconds() / 60, 1)
+        self._overnight_accuracy_recorded_window_key = str(previous_window_key)
+        self._overnight_accuracy_status = {
+            "state": spare_soc,
+            "result": result,
+            "reason": reason,
+            "meaning": (
+                "Positive means spare SOC above the planned reserve before the next off-peak; "
+                "negative means the target was too low."
+            ),
+            "target_soc": plan.get("target_soc"),
+            "target_source": plan.get("target_source"),
+            "minimum_soc": minimum_soc,
+            "minimum_soc_source": "Discharge Limit slider / device register 3023",
+            "buffer_soc": buffer_soc,
+            "reserve_floor_soc": reserve_floor_soc,
+            "soc_before_next_off_peak": round(current_soc, 1),
+            "spare_soc": spare_soc,
+            "tolerance_soc": tolerance_soc,
+            "checked_at": datetime.now(UTC).isoformat(),
+            "minutes_after_off_peak_effective_start": minutes_after_start,
+            "checked_late": minutes_after_start > 10,
+            "previous_window_key": previous_window_key,
+            "next_window_key": window["key"],
+            "locked_target_at": plan.get("locked_at"),
+            "off_peak_start": self.off_peak_start,
+            "off_peak_end": self.off_peak_end,
+            **{
+                key: value
+                for key, value in plan.items()
+                if key
+                not in {
+                    "window_key",
+                    "target_soc",
+                    "target_source",
+                    "locked_at",
+                }
+            },
+        }
+        self.async_update_listeners()
 
     def _set_overnight_status(
         self,
