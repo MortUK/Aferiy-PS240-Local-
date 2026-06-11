@@ -4,6 +4,15 @@
 
 - No unreleased changes.
 
+## 1.6.4
+
+- Persisted SMART runtime settings across Home Assistant restarts and power cuts, including Overnight Charge mode, Battery Capacity, tariff preset, custom off-peak times, Manual SOC, and Solar Availability.
+- Improved local TCP recovery by forcing a reconnect after empty or invalid poll responses while preserving last known good sensor data during short outages.
+- Kept SMART configuration controls visible during temporary TCP failures so local settings do not appear to reset when the battery poll is unavailable.
+- Improved SMART overnight planning for close-call and low-solar days by allowing cheap-rate top-up while leaving forecast solar headroom.
+- Added extra transparency on the bundled Overnight Plan card for cheap-rate top-up decisions and forecast solar headroom.
+- Reduced low-value diagnostic noise and recorder-heavy attributes to keep long-term history leaner.
+
 ## 1.6.3
 
 - Added SMART Overnight Accuracy as a diagnostic sensor to review the last completed SMART overnight cycle against the configured minimum SOC plus planned buffer.
