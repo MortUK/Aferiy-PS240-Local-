@@ -248,6 +248,12 @@ class AeccBatteryCapacityPresetSelect(
         """Restore the selected preset after restarts."""
         await super().async_added_to_hass()
 
+        if getattr(self.coordinator, "runtime_preferences_loaded", False):
+            self._selected_option = _closest_capacity_preset(
+                float(getattr(self.coordinator, "battery_capacity_kwh", DEFAULT_BATTERY_CAPACITY_KWH))
+            )
+            return
+
         last_state = await self.async_get_last_state()
         if last_state is None or last_state.state not in CAPACITY_PRESET_OPTIONS:
             self._selected_option = _closest_capacity_preset(
@@ -259,6 +265,9 @@ class AeccBatteryCapacityPresetSelect(
         module_count = _module_count_from_option(self._selected_option)
         if module_count is not None:
             self.coordinator.battery_capacity_kwh = battery_capacity_for_modules(module_count)
+            await self.coordinator.async_save_runtime_preferences(
+                battery_capacity_kwh=round(self.coordinator.battery_capacity_kwh, 3)
+            )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -273,7 +282,7 @@ class AeccBatteryCapacityPresetSelect(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.last_update_success
+        return True
 
     async def async_select_option(self, option: str) -> None:
         module_count = _module_count_from_option(option)
@@ -284,6 +293,9 @@ class AeccBatteryCapacityPresetSelect(
         capacity_kwh = battery_capacity_for_modules(module_count)
         self._selected_option = option
         self.coordinator.battery_capacity_kwh = capacity_kwh
+        await self.coordinator.async_save_runtime_preferences(
+            battery_capacity_kwh=round(capacity_kwh, 3)
+        )
         _LOGGER.info(
             "Stored AECC battery capacity preset %s as %.3f kWh. No battery command sent.",
             option,
@@ -320,11 +332,21 @@ class AeccAutomaticOvernightChargingSelect(
         """Restore the selected scheduler mode after restarts."""
         await super().async_added_to_hass()
 
-        last_state = await self.async_get_last_state()
-        if last_state is not None and last_state.state in OVERNIGHT_CHARGE_MODE_FROM_LABEL:
-            self._selected_mode = OVERNIGHT_CHARGE_MODE_FROM_LABEL[last_state.state]
+        if not getattr(self.coordinator, "runtime_preferences_loaded", False):
+            last_state = await self.async_get_last_state()
+            if last_state is not None and last_state.state in OVERNIGHT_CHARGE_MODE_FROM_LABEL:
+                self._selected_mode = OVERNIGHT_CHARGE_MODE_FROM_LABEL[last_state.state]
+        else:
+            self._selected_mode = getattr(
+                self.coordinator,
+                "overnight_charging_mode",
+                OVERNIGHT_CHARGE_MODE_DISABLED,
+            )
 
         self.coordinator.set_overnight_charging_mode(self._selected_mode)
+        await self.coordinator.async_save_runtime_preferences(
+            overnight_charging_mode=self._selected_mode
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -337,7 +359,7 @@ class AeccAutomaticOvernightChargingSelect(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.last_update_success
+        return True
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -363,6 +385,7 @@ class AeccAutomaticOvernightChargingSelect(
         mode = OVERNIGHT_CHARGE_MODE_FROM_LABEL[option]
         self._selected_mode = mode
         self.coordinator.set_overnight_charging_mode(mode)
+        await self.coordinator.async_save_runtime_preferences(overnight_charging_mode=mode)
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
 
@@ -393,11 +416,33 @@ class AeccSmartTariffPresetSelect(
         """Restore the SMART tariff preset without reloading the integration."""
         await super().async_added_to_hass()
 
-        last_state = await self.async_get_last_state()
-        if last_state is not None and last_state.state in TARIFF_PRESET_FROM_LABEL:
-            self._selected_preset = TARIFF_PRESET_FROM_LABEL[last_state.state]
+        if not getattr(self.coordinator, "runtime_preferences_loaded", False):
+            last_state = await self.async_get_last_state()
+            if last_state is not None and last_state.state in TARIFF_PRESET_FROM_LABEL:
+                self._selected_preset = TARIFF_PRESET_FROM_LABEL[last_state.state]
+        else:
+            self._selected_preset = getattr(
+                self.coordinator,
+                "smart_tariff_preset",
+                DEFAULT_TARIFF_PRESET,
+            )
 
         self.coordinator.set_smart_tariff_preset(self._selected_preset)
+        await self.coordinator.async_save_runtime_preferences(
+            smart_tariff_preset=self._selected_preset,
+            off_peak_start=getattr(self.coordinator, "off_peak_start", DEFAULT_OFF_PEAK_START),
+            off_peak_end=getattr(self.coordinator, "off_peak_end", DEFAULT_OFF_PEAK_END),
+            manual_off_peak_start=getattr(
+                self.coordinator,
+                "manual_off_peak_start",
+                DEFAULT_OFF_PEAK_START,
+            ),
+            manual_off_peak_end=getattr(
+                self.coordinator,
+                "manual_off_peak_end",
+                DEFAULT_OFF_PEAK_END,
+            ),
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -413,7 +458,7 @@ class AeccSmartTariffPresetSelect(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.last_update_success
+        return True
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -444,6 +489,13 @@ class AeccSmartTariffPresetSelect(
         if preset == "custom":
             start, end = self._window_for_preset(preset)
             self.coordinator.set_off_peak_window(start, end)
+        await self.coordinator.async_save_runtime_preferences(
+            smart_tariff_preset=preset,
+            off_peak_start=start,
+            off_peak_end=end,
+            manual_off_peak_start=getattr(self.coordinator, "manual_off_peak_start", start),
+            manual_off_peak_end=getattr(self.coordinator, "manual_off_peak_end", end),
+        )
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
 
@@ -491,13 +543,23 @@ class AeccSolarAvailabilitySelect(
         """Restore solar availability mode after restarts."""
         await super().async_added_to_hass()
 
-        last_state = await self.async_get_last_state()
-        if last_state is not None and last_state.state in SOLAR_AVAILABILITY_OPTIONS:
-            self._selected_option = last_state.state
+        if getattr(self.coordinator, "runtime_preferences_loaded", False):
+            self._selected_option = (
+                SOLAR_UNAVAILABLE
+                if bool(getattr(self.coordinator, "solar_unavailable_override", False))
+                else SOLAR_AVAILABLE
+            )
         else:
-            self._selected_option = SOLAR_AVAILABLE
+            last_state = await self.async_get_last_state()
+            if last_state is not None and last_state.state in SOLAR_AVAILABILITY_OPTIONS:
+                self._selected_option = last_state.state
+            else:
+                self._selected_option = SOLAR_AVAILABLE
 
         self.coordinator.solar_unavailable_override = self._selected_option == SOLAR_UNAVAILABLE
+        await self.coordinator.async_save_runtime_preferences(
+            solar_unavailable_override=self.coordinator.solar_unavailable_override
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -537,6 +599,9 @@ class AeccSolarAvailabilitySelect(
 
         self._selected_option = option
         self.coordinator.solar_unavailable_override = option == SOLAR_UNAVAILABLE
+        await self.coordinator.async_save_runtime_preferences(
+            solar_unavailable_override=self.coordinator.solar_unavailable_override
+        )
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
 

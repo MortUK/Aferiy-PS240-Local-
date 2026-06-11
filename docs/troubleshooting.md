@@ -9,7 +9,7 @@
 
 ## Entities Are Unavailable
 
-Check the `Connection Status`, `Last Successful Update`, and `Consecutive Poll Failures` entities first. These show whether the local TCP poll is succeeding or whether Home Assistant is using the last good data.
+Check the `Connection Status` and `Consecutive Poll Failures` entities first. These show whether the local TCP poll is succeeding or whether Home Assistant is using the last good data.
 
 ## Commands Do Not Appear To Apply
 

@@ -39,19 +39,32 @@ small buffer helps avoid hunting or "chattering" around zero export.
 
 Diagnostic entities are intended for troubleshooting rather than dashboards:
 
-- Last Successful Update
 - Consecutive Poll Failures
 - Last Command Result
 - Firmware Version
-- Grid Meter Agreement
-- Charging Reason
 - SMART Overnight Accuracy
+- SMART Morning Accuracy
 - Selected raw or derived diagnostic readings
 
 `SMART Overnight Accuracy` reviews the last completed SMART overnight cycle.
-Its signed percentage shows how much SOC was left above or below the planned
-reserve floor when the next off-peak window started. A positive value means the
-target was probably higher than needed; a negative value means it was too low.
+On solar-shortfall days, its signed percentage shows how much SOC was left
+above or below the planned reserve floor when the next off-peak window started.
+A positive value means the target was probably higher than needed; a negative
+value means it was too low. Solar-surplus days are reported as `0` and marked
+`not_scored_solar_surplus`, because solar refill makes end-of-day spare SOC a
+poor measure of the overnight calculation. If the battery started the cheap-rate
+window above the SMART target and never reached the target line, positive spare
+SOC is also reported as `0` and marked `not_scored_started_above_target`; that is
+carry-in energy, not an overcharge error. The same sensor also includes
+`morning_need_accuracy` attributes showing how close the battery came to the
+planned reserve floor before useful solar took over.
+
+`SMART Morning Accuracy` exposes that morning bridge result as a graphable
+signed percentage. A positive value means the battery stayed above the planned
+reserve floor before useful solar took over; a negative value means it dipped
+below the planned reserve. Carry-in nights that stayed above target and did not
+need charging are reported as `0` with the same `not_scored_started_above_target`
+result.
 
 ## Energy Estimate Sensors
 

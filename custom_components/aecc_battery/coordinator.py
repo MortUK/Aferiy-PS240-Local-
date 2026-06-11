@@ -12,6 +12,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -51,6 +52,7 @@ from .const import (
 from .tcp_client import AeccTcpClient
 
 _LOGGER = logging.getLogger(__name__)
+_RUNTIME_CONFIG_STORAGE_VERSION = 1
 
 # ── Unified field mapping ─────────────────────────────────────────────────────
 # Maps canonical sensor keys to (source, field_name, scale) tuples.
@@ -143,6 +145,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         self.device_name = device_name
         self._entry_id = entry_id
+        self._runtime_store: Store | None = (
+            Store(hass, _RUNTIME_CONFIG_STORAGE_VERSION, f"{DOMAIN}_{entry_id}_runtime_config")
+            if entry_id
+            else None
+        )
+        self.runtime_preferences_loaded: bool = False
         self._manufacturer = manufacturer
         self._model = model
         self._consecutive_failures: int = 0
@@ -189,7 +197,10 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overnight_locked_target_at: datetime | None = None
         self._overnight_locked_target_window_key: str | None = None
         self._overnight_locked_target_context: dict[str, Any] = {}
+        self._overnight_locked_target_charged_during_window: bool = False
+        self._overnight_locked_target_reached_threshold: bool = False
         self._overnight_last_completed_plan: dict[str, Any] | None = None
+        self._overnight_morning_accuracy: dict[str, Any] = {}
         self._overnight_accuracy_recorded_window_key: str | None = None
         self._overnight_accuracy_status: dict[str, Any] = {
             "state": None,
@@ -231,6 +242,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_setup(self) -> None:
         await self.client.async_connect()
+        await self.async_load_runtime_preferences()
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -255,6 +267,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._consecutive_failures += 1
             self.last_failed_update = datetime.now(UTC)
             self.last_failure_reason = "missing Storage_list/SSumInfoList"
+            if self._consecutive_failures in (1, self._failure_tolerance):
+                try:
+                    await self.client.async_reconnect()
+                except (TimeoutError, OSError, ConnectionError) as exc:
+                    _LOGGER.debug("Reconnect after invalid poll response failed: %s", exc)
             if self._consecutive_failures == 1:
                 _LOGGER.warning(
                     "Poll response missing expected data (Storage_list/SSumInfoList). "
@@ -282,6 +299,82 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_good_data = raw
         self._schedule_overnight_evaluation()
         return raw
+
+    async def async_load_runtime_preferences(self) -> None:
+        """Restore user SMART/config selections from HA storage before first poll."""
+        if self._runtime_store is None:
+            return
+        try:
+            data = await self._runtime_store.async_load()
+        except (OSError, ValueError) as exc:
+            _LOGGER.warning("Could not load AECC runtime config: %s", exc)
+            return
+        if not isinstance(data, dict):
+            return
+        self.runtime_preferences_loaded = True
+
+        capacity = self._safe_float(data.get("battery_capacity_kwh"))
+        if capacity is not None and capacity > 0:
+            self.battery_capacity_kwh = capacity
+
+        manual_target = self._safe_int(data.get("manual_overnight_target_soc"))
+        if manual_target is not None:
+            self.manual_overnight_target_soc = max(10, min(100, manual_target))
+
+        mode = data.get("overnight_charging_mode")
+        if mode in (
+            OVERNIGHT_CHARGE_MODE_DISABLED,
+            OVERNIGHT_CHARGE_MODE_SMART,
+            OVERNIGHT_CHARGE_MODE_MANUAL,
+        ):
+            self.overnight_charging_mode = mode
+            self._overnight_status["mode"] = mode
+
+        preset = data.get("smart_tariff_preset")
+        if preset in TARIFF_PRESETS:
+            self.smart_tariff_preset = preset
+
+        self.manual_off_peak_start = self._normalise_hhmm(
+            data.get("manual_off_peak_start", self.manual_off_peak_start),
+            self.manual_off_peak_start,
+        )
+        self.manual_off_peak_end = self._normalise_hhmm(
+            data.get("manual_off_peak_end", self.manual_off_peak_end),
+            self.manual_off_peak_end,
+        )
+        self.off_peak_start = self._normalise_hhmm(
+            data.get("off_peak_start", self.off_peak_start),
+            self.off_peak_start,
+        )
+        self.off_peak_end = self._normalise_hhmm(
+            data.get("off_peak_end", self.off_peak_end),
+            self.off_peak_end,
+        )
+
+        self.solar_unavailable_override = bool(data.get("solar_unavailable_override", False))
+        if self.overnight_charging_mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            self._set_overnight_off_status()
+
+    async def async_save_runtime_preferences(self, **updates: Any) -> None:
+        """Persist user SMART/config selections without reloading the integration."""
+        if self._runtime_store is None:
+            return
+        data = {
+            "battery_capacity_kwh": round(float(self.battery_capacity_kwh), 3),
+            "manual_overnight_target_soc": int(self.manual_overnight_target_soc),
+            "overnight_charging_mode": self.overnight_charging_mode,
+            "smart_tariff_preset": self.smart_tariff_preset,
+            "off_peak_start": self.off_peak_start,
+            "off_peak_end": self.off_peak_end,
+            "manual_off_peak_start": self.manual_off_peak_start,
+            "manual_off_peak_end": self.manual_off_peak_end,
+            "solar_unavailable_override": bool(self.solar_unavailable_override),
+        }
+        data.update(updates)
+        try:
+            await self._runtime_store.async_save(data)
+        except OSError as exc:
+            _LOGGER.warning("Could not save AECC runtime config: %s", exc)
 
     # ── Public access to commanded state (used by entity platforms) ──────────
 
@@ -553,6 +646,15 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Last completed SMART overnight charge accuracy review."""
         return dict(self._overnight_accuracy_status)
 
+    def _set_overnight_off_status(self) -> None:
+        """Make the overnight status reflect a disabled scheduler immediately."""
+        self._overnight_status = {
+            "state": "Off",
+            "mode": OVERNIGHT_CHARGE_MODE_DISABLED,
+            "reason": "Automatic overnight charging is off.",
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+
     def set_smart_history_status(self, attrs: dict[str, Any]) -> None:
         """Expose recorder-history quality for diagnostics and dashboards."""
         self._smart_history_status = dict(attrs)
@@ -568,11 +670,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.overnight_charging_mode = mode
         if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
             self._clear_overnight_locked_target()
-            self._overnight_status = {
-                "state": "Off",
-                "mode": mode,
-                "reason": "Automatic overnight charging is off.",
-            }
+            self._set_overnight_off_status()
         self._schedule_overnight_evaluation()
 
     def set_off_peak_window(self, start: str, end: str) -> None:
@@ -608,6 +706,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _schedule_overnight_evaluation(self) -> None:
         """Queue one scheduler pass after fresh data without blocking polling."""
         if self.overnight_charging_mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            self._set_overnight_off_status()
             return
         if self._overnight_task is not None and not self._overnight_task.done():
             return
@@ -619,11 +718,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Apply the local overnight charge-to-target decision tree."""
         mode = self.overnight_charging_mode
         if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            self._set_overnight_off_status()
             return
 
         now = dt_util.now()
         window = self._overnight_window(now)
         live_target_soc, live_target_source = self._overnight_target_soc(mode)
+        current_soc = self._safe_float(self.get_value("average_battery_soc"))
+        self._track_morning_accuracy(now)
         self._record_overnight_accuracy_if_due(now, window)
         if self._overnight_last_window_key != window["key"]:
             self._overnight_last_window_key = window["key"]
@@ -642,9 +744,18 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._overnight_locked_target_source = live_target_source
                 self._overnight_locked_target_at = datetime.now(UTC)
                 self._overnight_locked_target_window_key = window["key"]
-                self._overnight_locked_target_context = (
-                    self._snapshot_overnight_target_context()
+                self._overnight_locked_target_charged_during_window = False
+                self._overnight_locked_target_reached_threshold = bool(
+                    current_soc is not None and current_soc <= live_target_soc
                 )
+                lock_context = self._snapshot_overnight_target_context()
+                lock_context["soc_at_target_lock"] = (
+                    round(current_soc, 1) if current_soc is not None else None
+                )
+                lock_context["started_above_target"] = bool(
+                    current_soc is not None and current_soc > live_target_soc
+                )
+                self._overnight_locked_target_context = lock_context
             target_locked = True
 
         if (
@@ -658,7 +769,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target_soc = live_target_soc
             target_source = live_target_source
 
-        current_soc = self._safe_float(self.get_value("average_battery_soc"))
+        if (
+            current_soc is not None
+            and target_soc is not None
+            and self._overnight_locked_target_window_key == window["key"]
+            and current_soc <= target_soc
+        ):
+            self._overnight_locked_target_reached_threshold = True
+
         base_attrs = {
             "mode": mode,
             "target_source": target_source,
@@ -786,6 +904,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         success = await self.async_set_battery_control("Charge", power)
         if success:
             self._overnight_scheduler_started_charge = True
+            self._overnight_locked_target_charged_during_window = True
             self._overnight_last_action = "charge"
             self._overnight_last_action_at = datetime.now(UTC)
             self.commanded_operating_mode = "Charge"
@@ -884,6 +1003,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overnight_locked_target_at = None
         self._overnight_locked_target_window_key = None
         self._overnight_locked_target_context = {}
+        self._overnight_locked_target_charged_during_window = False
+        self._overnight_locked_target_reached_threshold = False
 
     def _remember_overnight_plan(self) -> None:
         if (
@@ -898,8 +1019,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "locked_at": self._overnight_locked_target_at.isoformat()
             if self._overnight_locked_target_at
             else None,
+            "charged_during_window": self._overnight_locked_target_charged_during_window,
+            "reached_or_below_target": self._overnight_locked_target_reached_threshold,
             **self._overnight_locked_target_context,
         }
+        self._ensure_morning_accuracy_tracker(self._overnight_last_completed_plan)
 
     def _snapshot_overnight_target_context(self) -> dict[str, Any]:
         state = self.hass.states.get(self._recommended_overnight_soc_entity_id())
@@ -936,6 +1060,151 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         context["recommendation_reason"] = attrs.get("recommendation_reason")
         return context
 
+    def _current_overnight_plan(self) -> dict[str, Any] | None:
+        if self._overnight_last_completed_plan:
+            return self._overnight_last_completed_plan
+        if (
+            self._overnight_locked_target_soc is None
+            or self._overnight_locked_target_window_key is None
+        ):
+            return None
+        return {
+            "window_key": self._overnight_locked_target_window_key,
+            "target_soc": self._overnight_locked_target_soc,
+            "target_source": self._overnight_locked_target_source,
+            "locked_at": self._overnight_locked_target_at.isoformat()
+            if self._overnight_locked_target_at
+            else None,
+            "charged_during_window": self._overnight_locked_target_charged_during_window,
+            "reached_or_below_target": self._overnight_locked_target_reached_threshold,
+            **self._overnight_locked_target_context,
+        }
+
+    def _reserve_floor_soc_for_plan(self, plan: dict[str, Any]) -> tuple[int, float, float]:
+        minimum_soc = int(self._commanded_min_soc)
+        buffer_soc = self._safe_float(plan.get("dynamic_buffer_soc")) or 0.0
+        reserve_floor_soc = round(min(100.0, minimum_soc + buffer_soc), 1)
+        return minimum_soc, buffer_soc, reserve_floor_soc
+
+    def _plan_datetime(self, value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed
+
+    def _ensure_morning_accuracy_tracker(self, plan: dict[str, Any]) -> None:
+        window_key = plan.get("window_key")
+        useful_solar_at = self._plan_datetime(plan.get("useful_solar_start_at"))
+        if not window_key or useful_solar_at is None:
+            return
+        if self._overnight_morning_accuracy.get("window_key") == window_key:
+            return
+        minimum_soc, buffer_soc, reserve_floor_soc = self._reserve_floor_soc_for_plan(plan)
+        self._overnight_morning_accuracy = {
+            "window_key": window_key,
+            "state": None,
+            "result": "tracking",
+            "minimum_soc": minimum_soc,
+            "buffer_soc": buffer_soc,
+            "reserve_floor_soc": reserve_floor_soc,
+            "soc_at_target_lock": plan.get("soc_at_target_lock"),
+            "started_above_target": bool(plan.get("started_above_target")),
+            "charged_during_window": bool(plan.get("charged_during_window")),
+            "reached_or_below_target": bool(plan.get("reached_or_below_target")),
+            "carry_in_not_scored": False,
+            "useful_solar_start_at": useful_solar_at.isoformat(),
+            "lowest_soc_before_useful_solar": None,
+            "lowest_soc_at": None,
+            "completed_at": None,
+            "reason": "Tracking the lowest SOC before useful solar takes over.",
+        }
+
+    def _track_morning_accuracy(self, now: datetime) -> None:
+        plan = self._current_overnight_plan()
+        if not plan:
+            return
+        self._ensure_morning_accuracy_tracker(plan)
+        tracker = self._overnight_morning_accuracy
+        if not tracker or tracker.get("window_key") != plan.get("window_key"):
+            return
+
+        useful_solar_at = self._plan_datetime(tracker.get("useful_solar_start_at"))
+        if useful_solar_at is None:
+            return
+
+        active_window = self._overnight_window(now)
+        if plan.get("window_key") == active_window["key"] and now < active_window["end"]:
+            return
+
+        current_soc = self._safe_float(self.get_value("average_battery_soc"))
+        if current_soc is None:
+            return
+
+        if tracker.get("completed_at"):
+            return
+
+        lowest_soc = self._safe_float(tracker.get("lowest_soc_before_useful_solar"))
+        if now <= useful_solar_at:
+            if lowest_soc is None or current_soc < lowest_soc:
+                tracker["lowest_soc_before_useful_solar"] = round(current_soc, 1)
+                tracker["lowest_soc_at"] = datetime.now(UTC).isoformat()
+                self.async_update_listeners()
+            return
+
+        if lowest_soc is None:
+            lowest_soc = current_soc
+            tracker["lowest_soc_before_useful_solar"] = round(current_soc, 1)
+            tracker["lowest_soc_at"] = datetime.now(UTC).isoformat()
+
+        reserve_floor_soc = self._safe_float(tracker.get("reserve_floor_soc")) or 0.0
+        spare_soc = round(lowest_soc - reserve_floor_soc, 1)
+        tolerance_soc = 2.0
+        carry_in_not_scored = bool(
+            spare_soc > tolerance_soc
+            and plan.get("started_above_target")
+            and not plan.get("charged_during_window")
+            and not plan.get("reached_or_below_target")
+        )
+        if carry_in_not_scored:
+            state = 0.0
+            result = "not_scored_started_above_target"
+            reason = (
+                "Battery stayed above the SMART target overnight and did not need charging; "
+                "morning spare SOC is carry-in energy rather than target error."
+            )
+        elif spare_soc > tolerance_soc:
+            state = spare_soc
+            result = "too_high"
+        elif spare_soc < -tolerance_soc:
+            state = spare_soc
+            result = "too_low"
+        else:
+            state = spare_soc
+            result = "about_right"
+        if not carry_in_not_scored:
+            reason = (
+                f"Lowest SOC before useful solar was {lowest_soc:.1f}%, "
+                f"{spare_soc:+.1f}% versus the {reserve_floor_soc:g}% planned reserve."
+            )
+
+        tracker.update(
+            {
+                "state": state,
+                "result": result,
+                "spare_soc": spare_soc,
+                "tolerance_soc": tolerance_soc,
+                "carry_in_not_scored": carry_in_not_scored,
+                "completed_at": datetime.now(UTC).isoformat(),
+                "reason": reason,
+            }
+        )
+        self.async_update_listeners()
+
     def _record_overnight_accuracy_if_due(
         self,
         now: datetime,
@@ -955,6 +1224,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "locked_at": self._overnight_locked_target_at.isoformat()
                 if self._overnight_locked_target_at
                 else None,
+                "charged_during_window": self._overnight_locked_target_charged_during_window,
+                "reached_or_below_target": self._overnight_locked_target_reached_threshold,
                 **self._overnight_locked_target_context,
             }
         if not plan:
@@ -980,24 +1251,49 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
             return
 
-        minimum_soc = int(self._commanded_min_soc)
-        buffer_soc = self._safe_float(plan.get("dynamic_buffer_soc")) or 0.0
-        reserve_floor_soc = round(min(100.0, minimum_soc + buffer_soc), 1)
+        minimum_soc, buffer_soc, reserve_floor_soc = self._reserve_floor_soc_for_plan(plan)
         spare_soc = round(current_soc - reserve_floor_soc, 1)
+        shortfall_kwh = self._safe_float(plan.get("whole_day_net_shortfall_kwh")) or 0.0
+        scored = shortfall_kwh > 0.05
         tolerance_soc = 2.0
-        if spare_soc > tolerance_soc:
+        carry_in_not_scored = bool(
+            scored
+            and spare_soc > tolerance_soc
+            and plan.get("started_above_target")
+            and not plan.get("charged_during_window")
+            and not plan.get("reached_or_below_target")
+        )
+        if not scored:
+            accuracy_state = 0.0
+            result = "not_scored_solar_surplus"
+            reason = (
+                "Solar forecast covered projected demand, so end-of-day spare SOC "
+                "is not a useful measure of overnight target accuracy."
+            )
+        elif carry_in_not_scored:
+            accuracy_state = 0.0
+            scored = False
+            result = "not_scored_started_above_target"
+            reason = (
+                "Battery started off-peak above the SMART target and never reached the target line, "
+                "so spare SOC is carry-in energy rather than an overcharge error."
+            )
+        elif spare_soc > tolerance_soc:
+            accuracy_state = spare_soc
             result = "too_high"
             reason = (
                 f"Battery had {spare_soc:.1f}% spare above the {reserve_floor_soc:g}% planned reserve "
                 "when the next off-peak window started."
             )
         elif spare_soc < -tolerance_soc:
+            accuracy_state = spare_soc
             result = "too_low"
             reason = (
                 f"Battery was {abs(spare_soc):.1f}% below the {reserve_floor_soc:g}% planned reserve "
                 "when the next off-peak window started."
             )
         else:
+            accuracy_state = spare_soc
             result = "about_right"
             reason = (
                 f"Battery finished within {tolerance_soc:.0f}% of the {reserve_floor_soc:g}% planned reserve "
@@ -1007,22 +1303,32 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         minutes_after_start = round((now - window["effective_start"]).total_seconds() / 60, 1)
         self._overnight_accuracy_recorded_window_key = str(previous_window_key)
         self._overnight_accuracy_status = {
-            "state": spare_soc,
+            "state": accuracy_state,
             "result": result,
             "reason": reason,
             "meaning": (
-                "Positive means spare SOC above the planned reserve before the next off-peak; "
-                "negative means the target was too low."
+                "On solar-shortfall days, positive means spare SOC above the planned reserve "
+                "before the next off-peak; negative means the target was too low. "
+                "Solar-surplus days and carry-in nights that never needed charging are reported as 0 "
+                "and marked not scored."
             ),
+            "scored": scored,
+            "carry_in_not_scored": carry_in_not_scored,
             "target_soc": plan.get("target_soc"),
             "target_source": plan.get("target_source"),
+            "soc_at_target_lock": plan.get("soc_at_target_lock"),
+            "started_above_target": bool(plan.get("started_above_target")),
+            "charged_during_window": bool(plan.get("charged_during_window")),
+            "reached_or_below_target": bool(plan.get("reached_or_below_target")),
             "minimum_soc": minimum_soc,
             "minimum_soc_source": "Discharge Limit slider / device register 3023",
             "buffer_soc": buffer_soc,
             "reserve_floor_soc": reserve_floor_soc,
             "soc_before_next_off_peak": round(current_soc, 1),
             "spare_soc": spare_soc,
+            "whole_day_net_shortfall_kwh": shortfall_kwh,
             "tolerance_soc": tolerance_soc,
+            "morning_need_accuracy": dict(self._overnight_morning_accuracy),
             "checked_at": datetime.now(UTC).isoformat(),
             "minutes_after_off_peak_effective_start": minutes_after_start,
             "checked_late": minutes_after_start > 10,
@@ -1140,6 +1446,15 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if value is None:
                 return None
             return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        try:
+            if value is None:
+                return None
+            return int(float(value))
         except (TypeError, ValueError):
             return None
 

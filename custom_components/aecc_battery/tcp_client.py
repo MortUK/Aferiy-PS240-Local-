@@ -31,6 +31,11 @@ class AeccTcpClient:
         await self._manager.close()
         self._connected = False
 
+    async def async_reconnect(self) -> None:
+        """Force a fresh TCP socket after a stale/empty response."""
+        await self._manager.reconnect()
+        self._connected = True
+
     # ── Public API ─────────────────────────────────────────────────────────
 
     async def get_energy_parameters(self) -> dict[str, Any] | None:
@@ -116,7 +121,9 @@ class AeccTcpClient:
                 await writer.drain()
                 result = await self._read_json(reader)
                 if result is None:
-                    _LOGGER.warning("GET %s returned no data", command)
+                    _LOGGER.warning("GET %s returned no data - forcing reconnect", command)
+                    self._connected = False
+                    await self._manager.reconnect()
                 return result
             except (ConnectionResetError, OSError, asyncio.IncompleteReadError) as exc:
                 _LOGGER.warning("GET %s connection error: %s - reconnecting after 2s cooldown", command, exc)

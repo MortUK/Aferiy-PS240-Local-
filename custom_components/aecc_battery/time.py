@@ -80,11 +80,14 @@ class AeccSmartOffPeakTime(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.last_update_success
+        return True
 
     async def async_added_to_hass(self) -> None:
         """Restore manual custom time without forcing Custom mode at startup."""
         await super().async_added_to_hass()
+
+        if getattr(self.coordinator, "runtime_preferences_loaded", False):
+            return
 
         last_state = await self.async_get_last_state()
         if last_state is None or last_state.state in ("unknown", "unavailable"):
@@ -105,6 +108,13 @@ class AeccSmartOffPeakTime(
         else:
             self.coordinator.set_manual_off_peak_time(end=hhmm)
 
+        await self.coordinator.async_save_runtime_preferences(
+            smart_tariff_preset="custom",
+            off_peak_start=getattr(self.coordinator, "off_peak_start", hhmm),
+            off_peak_end=getattr(self.coordinator, "off_peak_end", hhmm),
+            manual_off_peak_start=getattr(self.coordinator, "manual_off_peak_start", hhmm),
+            manual_off_peak_end=getattr(self.coordinator, "manual_off_peak_end", hhmm),
+        )
         _LOGGER.info("Stored AECC SMART off-peak %s as %s", self._attr_name, hhmm)
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()

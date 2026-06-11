@@ -367,6 +367,9 @@ class AeccManualOvernightChargeTarget(
                 self._commanded = 80
 
         self.coordinator.manual_overnight_target_soc = int(self._commanded)
+        await self.coordinator.async_save_runtime_preferences(
+            manual_overnight_target_soc=int(self._commanded)
+        )
         _LOGGER.info(
             "Restored AECC manual overnight charge target to %s%%",
             int(self._commanded),
@@ -382,11 +385,7 @@ class AeccManualOvernightChargeTarget(
 
     @property
     def available(self) -> bool:
-        return (
-            self.coordinator.last_update_success
-            and getattr(self.coordinator, "overnight_charging_mode", None)
-            == OVERNIGHT_CHARGE_MODE_MANUAL
-        )
+        return getattr(self.coordinator, "overnight_charging_mode", None) == OVERNIGHT_CHARGE_MODE_MANUAL
 
     async def async_set_native_value(self, value: float) -> None:
         target = int(
@@ -398,6 +397,9 @@ class AeccManualOvernightChargeTarget(
         )
         self._commanded = target
         self.coordinator.manual_overnight_target_soc = target
+        await self.coordinator.async_save_runtime_preferences(
+            manual_overnight_target_soc=target
+        )
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
 

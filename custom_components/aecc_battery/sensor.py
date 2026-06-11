@@ -14,7 +14,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
+from homeassistant.const import MATCH_ALL, PERCENTAGE, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -37,6 +37,14 @@ from .const import (
 from .coordinator import AeccBatteryCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+_UNRECORDED_ATTRIBUTES = frozenset({MATCH_ALL})
+
+
+class AeccRecorderLeanMixin:
+    """Keep live attributes available without storing them in recorder history."""
+
+    _unrecorded_attributes = _UNRECORDED_ATTRIBUTES
 
 # ── Standard power/measurement sensors ────────────────────────────────────────
 # (key, name, canonical_key, unit, icon, is_power)
@@ -68,20 +76,11 @@ _SENSORS = [
         "mdi:battery-charging",
         True,
     ),
-    (
-        "control_enable_status",
-        "Control Enable Status",
-        "control_enable_status",
-        None,
-        "mdi:toggle-switch",
-        False,
-    ),
 ]
 
 _DIAGNOSTIC_SENSOR_KEYS = {
     "total_grid_output_power",
     "total_charge_power",
-    "control_enable_status",
 }
 _DISABLED_BY_DEFAULT_SENSOR_KEYS = set()
 
@@ -166,10 +165,11 @@ _OVERNIGHT_USEFUL_SOLAR_DEMAND_FACTOR = 1.1
 _OVERNIGHT_MORNING_SUPPORT_SOLAR_MIN_W = 100.0
 _OVERNIGHT_MORNING_SUPPORT_DEMAND_FACTOR = 0.20
 _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR = 0.70
-_OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.70
-_OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.85
+_OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.80
+_OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.95
 _OVERNIGHT_BALANCED_SOLAR_RATIO = 1.0
 _OVERNIGHT_STRONG_SOLAR_RATIO = 1.2
+_OVERNIGHT_CLOSE_CALL_SOLAR_RATIO = 1.15
 _OVERNIGHT_SOLAR_CAPABLE_RATIO = 0.75
 _OVERNIGHT_SOLAR_CAPABLE_MIN_KWH = 6.0
 _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR = 0.7
@@ -321,14 +321,12 @@ async def async_setup_entry(
     entities.append(AeccTotalBatteryOutputPowerSensor(coordinator, config_entry))
     entities.append(AeccBatteryStatusSensor(coordinator, config_entry))
     entities.append(AeccConnectionStatusSensor(coordinator, config_entry))
-    entities.append(AeccLastSuccessfulUpdateSensor(coordinator, config_entry))
     entities.append(AeccConsecutiveFailuresSensor(coordinator, config_entry))
     entities.append(AeccLastCommandResultSensor(coordinator, config_entry))
-    entities.append(AeccGridMeterAgreementSensor(coordinator, config_entry))
-    entities.append(AeccChargingReasonSensor(coordinator, config_entry))
     entities.append(AeccAutomaticOvernightChargingStatusSensor(coordinator, config_entry))
     entities.append(AeccSmartHistorySensor(coordinator, config_entry))
     entities.append(AeccSmartOvernightAccuracySensor(coordinator, config_entry))
+    entities.append(AeccSmartMorningAccuracySensor(coordinator, config_entry))
 
     entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
     entities.append(AeccHouseDemandEnergySensor(coordinator, config_entry))
@@ -774,7 +772,11 @@ class AeccBatteryPowerSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEn
             return None
 
 
-class AeccEstimatedHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccEstimatedHouseDemandSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Estimated whole-home demand from PV, battery flow, and AECC grid flow."""
 
     _attr_has_entity_name = True
@@ -806,6 +808,7 @@ class AeccEstimatedHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordinator], 
 
 
 class AeccHouseDemandEnergyBase(
+    AeccRecorderLeanMixin,
     CoordinatorEntity[AeccBatteryCoordinator],
     RestoreEntity,
     SensorEntity,
@@ -922,7 +925,11 @@ class AeccHouseDemandDailySensor(AeccHouseDemandEnergyBase):
         }
 
 
-class AeccGridMeterAgreementSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccGridMeterAgreementSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Diagnostic difference between AECC and Shelly grid readings."""
 
     _attr_has_entity_name = True
@@ -985,7 +992,11 @@ class AeccGridMeterAgreementSensor(CoordinatorEntity[AeccBatteryCoordinator], Se
         return dict(self._last_attributes)
 
 
-class AeccChargingReasonSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccChargingReasonSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Human-readable reason for the current battery charge behavior."""
 
     _attr_has_entity_name = True
@@ -1050,6 +1061,7 @@ class AeccChargingReasonSensor(CoordinatorEntity[AeccBatteryCoordinator], Sensor
 
 
 class AeccAutomaticOvernightChargingStatusSensor(
+    AeccRecorderLeanMixin,
     CoordinatorEntity[AeccBatteryCoordinator],
     SensorEntity,
 ):
@@ -1081,6 +1093,7 @@ class AeccAutomaticOvernightChargingStatusSensor(
 
 
 class AeccSmartHistorySensor(
+    AeccRecorderLeanMixin,
     CoordinatorEntity[AeccBatteryCoordinator],
     SensorEntity,
 ):
@@ -1176,6 +1189,7 @@ class AeccSmartHistorySensor(
 
 
 class AeccSmartOvernightAccuracySensor(
+    AeccRecorderLeanMixin,
     CoordinatorEntity[AeccBatteryCoordinator],
     SensorEntity,
 ):
@@ -1209,6 +1223,51 @@ class AeccSmartOvernightAccuracySensor(
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return dict(self.coordinator.overnight_accuracy_status)
+
+
+class AeccSmartMorningAccuracySensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
+    """Morning bridge accuracy from off-peak end until useful solar."""
+
+    _attr_has_entity_name = True
+    _attr_name = "SMART Morning Accuracy"
+    _attr_icon = "mdi:weather-sunset-up"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_smart_morning_accuracy"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> float | None:
+        tracker = self.coordinator.overnight_accuracy_status.get("morning_need_accuracy")
+        if not isinstance(tracker, dict):
+            return None
+        return _as_float(tracker.get("state"))
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        tracker = self.coordinator.overnight_accuracy_status.get("morning_need_accuracy")
+        if not isinstance(tracker, dict):
+            return {
+                "result": "waiting",
+                "reason": "Waiting for a completed SMART morning bridge calculation.",
+            }
+        return dict(tracker)
 
 
 class AeccBatteryStatusSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
@@ -1280,7 +1339,11 @@ class AeccBatteryStatusSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorE
         return status
 
 
-class AeccConnectionStatusSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccConnectionStatusSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Human-readable integration connection status."""
 
     _attr_has_entity_name = True
@@ -1340,6 +1403,8 @@ class AeccLastSuccessfulUpdateSensor(CoordinatorEntity[AeccBatteryCoordinator], 
     _attr_name = "Last Successful Update"
     _attr_icon = "mdi:update"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._config_entry = config_entry
@@ -1351,10 +1416,17 @@ class AeccLastSuccessfulUpdateSensor(CoordinatorEntity[AeccBatteryCoordinator], 
 
     @property
     def native_value(self) -> datetime | None:
-        return self.coordinator.last_successful_update
+        value = self.coordinator.last_successful_update
+        if value is None:
+            return None
+        return value.replace(second=0, microsecond=0)
 
 
-class AeccConsecutiveFailuresSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccConsecutiveFailuresSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Number of consecutive failed local polls."""
 
     _attr_has_entity_name = True
@@ -1387,7 +1459,11 @@ class AeccConsecutiveFailuresSensor(CoordinatorEntity[AeccBatteryCoordinator], S
         }
 
 
-class AeccLastCommandResultSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccLastCommandResultSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Result of the last control command sent to the battery."""
 
     _attr_has_entity_name = True
@@ -1427,7 +1503,11 @@ class AeccLastCommandResultSensor(CoordinatorEntity[AeccBatteryCoordinator], Sen
         return dict(latest)
 
 
-class AeccEstimatedChargeTimeSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccEstimatedChargeTimeSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Display-only estimate of time until the battery reaches 100% SOC."""
 
     _attr_has_entity_name = True
@@ -1906,7 +1986,11 @@ class AeccWillFillTodaySensor(AeccEstimatedChargeTimeSensor):
         }
 
 
-class AeccRuntimeAtCurrentHouseDemandSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+class AeccRuntimeAtCurrentHouseDemandSensor(
+    AeccRecorderLeanMixin,
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
     """Estimated runtime until reserve using recent house-demand history."""
 
     _attr_has_entity_name = True
@@ -3107,7 +3191,26 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         buffer_kwh = capacity_kwh * buffer_soc / 100
         reserve_kwh = capacity_kwh * reserve_soc / 100
         usable_capacity_kwh = capacity_kwh * max(0.0, _FULL_SOC - reserve_soc) / 100
-        required_ac_kwh = max(0.0, float(projection["required_start_energy_kwh"]))
+        base_required_ac_kwh = max(0.0, float(projection["required_start_energy_kwh"]))
+        cheap_topup_attrs = self._cheap_rate_topup_attrs(projection, usable_capacity_kwh)
+        cheap_topup_target_kwh = _as_float(cheap_topup_attrs.get("cheap_rate_topup_target_kwh"), 0.0) or 0.0
+        required_ac_kwh = max(base_required_ac_kwh, cheap_topup_target_kwh)
+        cheap_topup_attrs["base_required_start_energy_kwh"] = round(base_required_ac_kwh, 3)
+        cheap_topup_attrs["cheap_rate_topup_extra_kwh"] = round(
+            max(0.0, cheap_topup_target_kwh - base_required_ac_kwh),
+            3,
+        )
+        projection = {
+            **projection,
+            **cheap_topup_attrs,
+            "required_start_energy_kwh": round(required_ac_kwh, 3),
+            "required_energy_basis": (
+                "cheap_rate_topup_leaving_forecast_solar_headroom"
+                if cheap_topup_target_kwh > base_required_ac_kwh
+                else projection.get("required_energy_basis")
+            ),
+        }
+        attrs.update(cheap_topup_attrs)
         required_battery_kwh = required_ac_kwh / _OVERNIGHT_DISCHARGE_EFFICIENCY
         loss_allowance_kwh = max(0.0, required_battery_kwh - required_ac_kwh)
         confidence_adjustment_kwh = capacity_kwh * confidence_adjustment_soc / 100
@@ -3198,6 +3301,50 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         self._previous_recommendation_date = attrs["recommendation_local_date"]
         return rounded_target_soc, attrs
 
+    @staticmethod
+    def _cheap_rate_topup_attrs(
+        projection: dict[str, Any],
+        usable_capacity_kwh: float,
+    ) -> dict[str, Any]:
+        """Extra overnight target for low/close-call solar days.
+
+        On strong solar days the target should only cover the morning bridge.
+        On low or close-call days, use cheap-rate energy to fill the part of the
+        battery that tomorrow's forecast solar is unlikely to fill, while still
+        leaving enough headroom for the forecast solar surplus.
+        """
+        solar_unavailable = bool(projection.get("solar_unavailable_override"))
+        source = projection.get("solar_forecast_source")
+        solar_ratio = _as_float(projection.get("solar_to_demand_ratio"), 0.0) or 0.0
+        solar_surplus_kwh = _as_float(projection.get("projected_solar_surplus_kwh"), 0.0) or 0.0
+        solar_covers_day = bool(projection.get("solar_covers_day"))
+        close_call = 0 < solar_ratio < _OVERNIGHT_CLOSE_CALL_SOLAR_RATIO
+        apply_topup = (
+            not solar_unavailable
+            and source == "Solcast detailed forecast file"
+            and usable_capacity_kwh > 0
+            and (not solar_covers_day or close_call)
+        )
+        target_kwh = max(0.0, usable_capacity_kwh - solar_surplus_kwh) if apply_topup else 0.0
+        target_kwh = min(max(0.0, target_kwh), max(0.0, usable_capacity_kwh))
+        if not apply_topup:
+            reason = "strong_solar_day_or_no_timed_forecast"
+        elif not solar_covers_day:
+            reason = "forecast_solar_below_projected_house_demand"
+        else:
+            reason = "close_call_solar_forecast"
+        return {
+            "cheap_rate_topup_active": apply_topup,
+            "cheap_rate_topup_reason": reason,
+            "cheap_rate_topup_target_kwh": round(target_kwh, 3),
+            "cheap_rate_topup_leaves_solar_headroom_kwh": round(
+                max(0.0, usable_capacity_kwh - target_kwh),
+                3,
+            ),
+            "cheap_rate_topup_solar_surplus_kwh": round(solar_surplus_kwh, 3),
+            "cheap_rate_topup_close_call_ratio": _OVERNIGHT_CLOSE_CALL_SOLAR_RATIO,
+        }
+
     def _dynamic_buffer_soc(
         self,
         capacity_kwh: float,
@@ -3233,6 +3380,11 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         if projected_solar_kwh < _OVERNIGHT_LOW_SOLAR_KWH:
             buffer_soc += 1
             reasons.append("low_solar_forecast")
+
+        solar_to_demand_ratio = _as_float(projection.get("solar_to_demand_ratio"), 0.0) or 0.0
+        if 0 < solar_to_demand_ratio < _OVERNIGHT_CLOSE_CALL_SOLAR_RATIO:
+            buffer_soc += 1
+            reasons.append("close_call_solar_forecast")
 
         maximum = _OVERNIGHT_EMPTY_HOUSE_MAX_BUFFER_SOC if house_empty else _OVERNIGHT_MAX_BUFFER_SOC
         buffer_soc = min(maximum, max(1.0, buffer_soc))
@@ -3430,6 +3582,9 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             _as_float(projection.get("pre_sunrise_credited_solar_kwh"), 0.0) or 0.0
         )
         post_sunset_need_kwh = _as_float(projection.get("post_sunset_need_kwh"), 0.0) or 0.0
+        cheap_rate_topup_target_kwh = _as_float(projection.get("cheap_rate_topup_target_kwh"), 0.0) or 0.0
+        cheap_rate_topup_extra_kwh = _as_float(projection.get("cheap_rate_topup_extra_kwh"), 0.0) or 0.0
+        solar_surplus_kwh = _as_float(projection.get("projected_solar_surplus_kwh"), 0.0) or 0.0
         buffer_soc = _as_float(buffer_attrs.get("dynamic_buffer_soc"), 0.0) or 0.0
         confidence_soc = _as_float(confidence_attrs.get("forecast_confidence_adjustment_soc"), 0.0) or 0.0
 
@@ -3439,12 +3594,20 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "battery_capacity_kwh": round(capacity_kwh, 3),
             "projected_house_demand_kwh": round(projected_house_kwh, 3),
             "projected_solar_kwh": round(projected_solar_kwh, 3),
+            "projected_solar_surplus_kwh": round(solar_surplus_kwh, 3),
             "pre_sunrise_need_kwh": round(pre_sunrise_need_kwh, 3),
             "pre_sunrise_net_need_kwh": round(pre_sunrise_net_need_kwh, 3),
             "pre_sunrise_credited_solar_kwh": round(pre_sunrise_credited_solar_kwh, 3),
             "pre_sunrise_solar_credit_factor": projection.get("pre_sunrise_solar_credit_factor"),
             "post_sunset_need_kwh": round(post_sunset_need_kwh, 3),
             "post_sunset_start_at": projection.get("post_sunset_start_at"),
+            "cheap_rate_topup_active": projection.get("cheap_rate_topup_active"),
+            "cheap_rate_topup_reason": projection.get("cheap_rate_topup_reason"),
+            "cheap_rate_topup_target_kwh": round(cheap_rate_topup_target_kwh, 3),
+            "cheap_rate_topup_extra_kwh": round(cheap_rate_topup_extra_kwh, 3),
+            "cheap_rate_topup_leaves_solar_headroom_kwh": projection.get(
+                "cheap_rate_topup_leaves_solar_headroom_kwh"
+            ),
             "no_useful_solar_forecast": projection.get("no_useful_solar_forecast"),
             "solar_credit_mode": projection.get("solar_credit_mode"),
             "solar_unavailable_override": projection.get("solar_unavailable_override"),
@@ -3467,6 +3630,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         )
         if projection.get("no_useful_solar_forecast"):
             summary += f"; low-solar credit {pre_sunrise_credited_solar_kwh:.2f} kWh"
+        if cheap_rate_topup_extra_kwh > 0:
+            summary += f"; cheap-rate top-up +{cheap_rate_topup_extra_kwh:.2f} kWh"
         if projection.get("solar_unavailable_override"):
             summary += "; Solar Unavailable: Batteries Only"
         if confidence_soc:
@@ -3541,9 +3706,15 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             0.0,
         ) or 0.0
         projected_solar_kwh = _as_float(projection.get("projected_peak_solar_kwh"), 0.0) or 0.0
+        cheap_topup_extra_kwh = _as_float(projection.get("cheap_rate_topup_extra_kwh"), 0.0) or 0.0
         grid_text = (
             f", approx {estimated_grid_charge_energy_kwh:.2f} kWh grid charge to reach target"
             if estimated_grid_charge_energy_kwh is not None and estimated_grid_charge_energy_kwh > 0
+            else ""
+        )
+        topup_text = (
+            f", cheap-rate top-up {cheap_topup_extra_kwh:.2f} kWh"
+            if cheap_topup_extra_kwh > 0
             else ""
         )
         return (
@@ -3552,6 +3723,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             f"dynamic buffer {buffer_kwh:.2f} kWh ({buffer_attrs.get('dynamic_buffer_soc')}%), "
             f"forecast solar {projected_solar_kwh:.1f} kWh"
             f"{' (Solar Unavailable: Batteries Only)' if projection.get('solar_unavailable_override') else ''}"
+            f"{topup_text}"
             f"{grid_text}."
         )
 
@@ -3718,6 +3890,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         maximum_deficit_kwh = 0.0
         demand_kwh = 0.0
         solar_kwh = 0.0
+        solar_surplus_kwh = 0.0
         pre_sunrise_open = True
         pre_sunrise_net_need_kwh = 0.0
         pre_sunrise_demand_kwh = 0.0
@@ -3741,6 +3914,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             demand_w, used_profile = self._demand_w_for_time(current, profile_start, profile, fallback_demand_w)
             segment_demand_kwh = demand_w * hours / 1000
             segment_solar_kwh = self._solar_kwh_for_segment(current, segment_end, forecast_periods)
+            solar_surplus_kwh += max(0.0, segment_solar_kwh - segment_demand_kwh)
             segment_solar_w = segment_solar_kwh * 1000 / hours if hours > 0 else 0.0
             if first_solar_start_at is None and segment_solar_w >= _RUNTIME_SOLAR_ACTIVE_THRESHOLD_W:
                 first_solar_start_at = current
@@ -3855,6 +4029,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_forecast_path": None if solar_unavailable else self._forecast_cache_path,
             "projected_peak_house_demand_kwh": round(demand_kwh, 3),
             "projected_peak_solar_kwh": round(solar_kwh, 3),
+            "projected_solar_surplus_kwh": round(solar_surplus_kwh, 3),
             "solar_unavailable_override": solar_unavailable,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
             "required_start_energy_kwh": round(required_start_energy_kwh, 3),
@@ -3941,6 +4116,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_forecast_source": "Solar Unavailable override" if solar_unavailable else _SOLCAST_TOMORROW_ENTITY,
             "projected_peak_house_demand_kwh": round(peak_demand_kwh, 3),
             "projected_peak_solar_kwh": round(forecast_kwh, 3),
+            "projected_solar_surplus_kwh": None,
             "solar_unavailable_override": solar_unavailable,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
             "pre_sunrise_need_kwh": round(morning_gap_kwh, 3),

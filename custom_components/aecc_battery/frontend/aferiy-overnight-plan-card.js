@@ -28,6 +28,19 @@ class AferiyOvernightPlanCard extends HTMLElement {
       config.overnight_status_entity,
       "sensor",
       "_automatic_overnight_charging_status",
+    ) || this._findState(
+      config.overnight_status_entity,
+      "sensor",
+      "_overnight_status",
+    );
+    const overnightCharge = this._findState(
+      config.overnight_charge_entity,
+      "select",
+      "_overnight_charge",
+    ) || this._findState(
+      config.overnight_charge_entity,
+      "select",
+      "_automatic_overnight_charging",
     );
     const solarAvailability = this._findState(
       config.solar_availability_entity,
@@ -46,7 +59,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
     const target = this._stateText(recommended, "%");
     const plannedNeed = this._plannedNeedKwh(recommended, attrs, breakdown);
     const needed = this._numberText(plannedNeed, 3, "kWh");
-    const status = this._cleanText(overnightStatus?.state, "Waiting for off-peak");
+    const status = this._overnightStatusText(overnightCharge, overnightStatus);
     const tariff = this._tariffLabel(hass, attrs);
     const solarMode = this._solarMode(solarAvailability, attrs);
     const demand = this._numberText(
@@ -83,11 +96,26 @@ class AferiyOvernightPlanCard extends HTMLElement {
       breakdown.loss_allowance_kwh ?? attrs.battery_loss_allowance_kwh,
       2,
       "kWh",
+      true,
     );
     const buffer = this._numberText(
       breakdown.dynamic_buffer_kwh ?? attrs.buffer_energy_kwh,
       2,
       "kWh",
+    );
+    const cheapTopupExtraRaw = Number(breakdown.cheap_rate_topup_extra_kwh ?? attrs.cheap_rate_topup_extra_kwh ?? 0);
+    const cheapTopupExtra = this._numberText(cheapTopupExtraRaw, 2, "kWh", true);
+    const solarHeadroom = this._numberText(
+      breakdown.cheap_rate_topup_leaves_solar_headroom_kwh ?? attrs.cheap_rate_topup_leaves_solar_headroom_kwh,
+      2,
+      "kWh",
+      true,
+    );
+    const solarSurplus = this._numberText(
+      breakdown.projected_solar_surplus_kwh ?? attrs.projected_solar_surplus_kwh,
+      2,
+      "kWh",
+      true,
     );
     const usefulSolar = this._timeText(attrs.solar_break_even_at, true)
       || "No break-even in forecast window";
@@ -96,7 +124,6 @@ class AferiyOvernightPlanCard extends HTMLElement {
     const smartHistoryText = smartHistory && this._isKnown(smartHistory.state)
       ? `${Math.round(Number(smartHistory.state))}% complete`
       : "Waiting";
-    const method = this._cleanText(attrs.method, "Waiting for Solcast/history").replaceAll("_", " ");
 
     this.innerHTML = `
       <ha-card>
@@ -218,12 +245,12 @@ class AferiyOvernightPlanCard extends HTMLElement {
           <div><b>Target:</b> ${this._escape(target)}</div>
           <div><b>Battery capacity:</b> ${this._escape(batteryCapacity)}${Number.isFinite(usableCapacity) ? ` - (${this._escape(this._numberText(usableCapacity, 2, "kWh"))} Usable)` : ""}</div>
           <div><b>Day balance:</b> ${this._escape(demand)} demand · ${this._escape(solar)} solar${wholeShortfall ? ` · ${this._escape(wholeShortfall)} shortfall` : ""}</div>
-          <div><b>Battery need:</b> ${this._escape(requiredNeed)} peak deficit · ${this._escape(losses)} losses · ${this._escape(buffer)} buffer</div>
-          <div><b>Timing checks:</b> Pre-sunrise floor ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset load ${this._escape(postSunset)}</div>
+          <div><b>Battery need:</b> ${this._escape(requiredNeed)} peak deficit${losses ? ` · ${this._escape(losses)} losses` : ""} · ${this._escape(buffer)} buffer</div>
+          ${cheapTopupExtra ? `<div><b>Cheap-rate top-up:</b> ${this._escape(cheapTopupExtra)} extra${solarHeadroom ? ` · leaves ${this._escape(solarHeadroom)} for solar` : ""}${solarSurplus ? ` · ${this._escape(solarSurplus)} forecast surplus` : ""}</div>` : ""}
+          <div><b>Shortfall:</b> Pre-sunrise need ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset need ${this._escape(postSunset)}</div>
           <div><b>Useful solar:</b> ${this._escape(usefulSolar)}</div>
           <div><b>Confidence:</b> ${this._escape(confidence)} · History ${this._escape(history)}</div>
           <div><b>Smart History:</b> ${this._escape(smartHistoryText)}</div>
-          <div><b>Mode:</b> ${this._escape(solarMode === "Batteries Only" ? "Batteries Only" : `Forecast solar · ${method}`)}</div>
         </div>
       </ha-card>
     `;
@@ -348,6 +375,17 @@ class AferiyOvernightPlanCard extends HTMLElement {
     return "Forecast";
   }
 
+  _overnightStatusText(overnightCharge, overnightStatus) {
+    const mode = this._cleanText(overnightCharge?.state, "");
+    if (mode === "Off" || mode === "Disabled") {
+      return "Off";
+    }
+    if (mode === "Unavailable" || overnightCharge?.state === "unavailable") {
+      return "Unavailable";
+    }
+    return this._cleanText(overnightStatus?.state, "Unknown");
+  }
+
   _stateText(state, suffix = "") {
     if (!state || !this._isKnown(state.state)) {
       return "Waiting";
@@ -427,10 +465,20 @@ class AferiyOvernightPlanCard extends HTMLElement {
     if (Number.isNaN(timestamp)) {
       return "";
     }
-    const options = includeDay
-      ? { weekday: "short", hour: "2-digit", minute: "2-digit" }
-      : { hour: "2-digit", minute: "2-digit" };
-    return new Intl.DateTimeFormat(undefined, options).format(new Date(timestamp));
+    const date = new Date(timestamp);
+    if (includeDay) {
+      const day = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(date);
+      const time = new Intl.DateTimeFormat(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      })
+        .format(date)
+        .replace(/\s/g, "")
+        .toLowerCase();
+      return `${day} - ${time}`;
+    }
+    return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
   }
 
   _titleText(value, fallback) {
