@@ -1038,6 +1038,8 @@ class AeccChargingReasonSensor(
             reason = "Manual charge"
         elif mode == "Discharge":
             reason = "Manual discharge"
+        elif mode == "Feed":
+            reason = "Fixed feed"
         elif mode in ("Self-Gen/Zero Export", "Self-Consumption"):
             reason = "Self-consumption"
         elif mode == "Idle":

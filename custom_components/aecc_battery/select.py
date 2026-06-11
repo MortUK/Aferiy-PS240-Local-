@@ -26,6 +26,7 @@ from .const import (
     CONF_TARIFF_PRESET,
     MODE_CUSTOM,
     MODE_SELF_CONSUMPTION,
+    MAX_REGISTER_POWER_DEFAULT,
     OVERNIGHT_CHARGE_MODE_FROM_LABEL,
     OVERNIGHT_CHARGE_MODE_LABELS,
     OVERNIGHT_CHARGE_MODE_DISABLED,
@@ -40,7 +41,7 @@ from .coordinator import AeccBatteryCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 OPERATING_MODE_SELF_GEN = "Self-Gen/Zero Export"
-OPERATING_MODE_OPTIONS = [OPERATING_MODE_SELF_GEN, "Idle", "Charge", "Discharge"]
+OPERATING_MODE_OPTIONS = [OPERATING_MODE_SELF_GEN, "Idle", "Charge", "Discharge", "Feed"]
 DIRECTION_OPTIONS = ["Charge", "Discharge", "Idle"]
 CAPACITY_PRESET_OPTIONS = [
     battery_capacity_preset_label(module_count)
@@ -110,6 +111,7 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
     Idle             -> manual/custom idle
     Charge           -> manual/custom charge using Charge Power
     Discharge        -> manual/custom discharge using Discharge Power
+    Feed             -> EMS/base grid-connected feed using Feed Power
     """
 
     _attr_icon = "mdi:battery-sync"
@@ -218,6 +220,22 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
                 self.async_write_ha_state()
             else:
                 _LOGGER.error("Failed to set operating mode to Discharge")
+            return
+
+        if option == "Feed":
+            power = int(getattr(self.coordinator, "commanded_feed_power", 0) or 0)
+            power = _clamp(power, 0, MAX_REGISTER_POWER_DEFAULT)
+
+            success = await self.coordinator.async_set_feed_power(power)
+            if success:
+                self.coordinator.commanded_power = power
+                self.coordinator.commanded_direction = "Feed"
+                self.coordinator.commanded_work_mode = MODE_CUSTOM
+                self.coordinator.commanded_operating_mode = "Feed"
+                self.coordinator.async_set_updated_data(self.coordinator.data or {})
+                self.async_write_ha_state()
+            else:
+                _LOGGER.error("Failed to set operating mode to Feed")
             return
 
         _LOGGER.warning("Unknown operating mode selected: %s", option)

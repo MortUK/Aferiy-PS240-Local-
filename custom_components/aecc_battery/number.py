@@ -42,6 +42,7 @@ async def async_setup_entry(
         [
             AeccChargePowerSlider(coordinator, config_entry),
             AeccDischargePowerSlider(coordinator, config_entry),
+            AeccFeedPowerSlider(coordinator, config_entry),
             AeccPvSurplusChargeTrigger(coordinator, config_entry),
             AeccManualOvernightChargeTarget(coordinator, config_entry),
             AeccMinSoc(coordinator, config_entry),
@@ -178,6 +179,39 @@ class AeccDischargePowerSlider(AeccPassivePowerSlider):
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry)
         self._attr_unique_id = f"{config_entry.entry_id}_discharge_power_target"
+
+
+class AeccFeedPowerSlider(AeccPassivePowerSlider):
+    """Base feed power target slider.
+
+    This is applied by the Operating Mode "Feed" option. It maps to the
+    cloud-app "Battery base grid-connected power" setting and is separate
+    from the manual schedule Discharge mode.
+    """
+
+    _attr_name = "Base Feed Power"
+    _attr_icon = "mdi:transmission-tower-export"
+    _attr_native_min_value = 0
+    _attr_native_max_value = MAX_REGISTER_POWER_DEFAULT
+    _attr_native_step = 10
+    _attr_unique_id_suffix = "feed_power_target"
+    attr_name_on_coordinator = "commanded_feed_power"
+    default_value = 0
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator, config_entry)
+        self._attr_unique_id = f"{config_entry.entry_id}_feed_power_target"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if self.coordinator.initial_base_discharge_power is not None:
+            self._commanded = _clamp_number(
+                self.coordinator.initial_base_discharge_power,
+                float(self._attr_native_min_value),
+                float(self._attr_native_max_value),
+            )
+            self.coordinator.commanded_feed_power = int(self._commanded)
+            self.async_write_ha_state()
 
 
 class AeccPvSurplusChargeTrigger(

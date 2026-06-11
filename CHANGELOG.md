@@ -4,6 +4,13 @@
 
 - No unreleased changes.
 
+## 1.7.0
+
+- Added experimental Feed mode to Operating Mode using the locally discovered base grid-connected feed/discharge register `3026`.
+- Added a passive Base Feed Power slider from `0-800 W`; moving the slider only stores the target until Operating Mode is set to Feed.
+- Made Self-Gen/Zero Export clear the base feed value so Feed mode does not linger after returning to the normal safe mode.
+- Documented that Feed mode is experimental and actual output may differ from the target, especially on systems with smart meter/CT feedback.
+
 ## 1.6.4
 
 - Persisted SMART runtime settings across Home Assistant restarts and power cuts, including Overnight Charge mode, Battery Capacity, tariff preset, custom off-peak times, Manual SOC, and Solar Availability.

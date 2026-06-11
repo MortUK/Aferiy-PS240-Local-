@@ -3,7 +3,7 @@
 ![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.jpeg)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.6.4-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.7.0-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-RichardOwen-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/richardowen)
@@ -17,6 +17,7 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Local TCP connection to the battery, usually on port `8080`
 - Battery state of charge, power, PV, charge, discharge, and diagnostic sensors
 - Manual charge, discharge, idle, and self-consumption controls
+- Experimental Feed mode with a passive Base Feed Power target
 - Local-first automatic overnight charging with smart or manual SOC targets
 - Charge and discharge SOC limits
 - Charge/discharge power targets from 800 W to 1200 W for cautious PS240 testing
@@ -187,6 +188,34 @@ charging from the extra energy.
 Having a small buffer gives the system a stable threshold to trigger clean,
 sustained battery charging without constantly hunting or "chattering" around
 zero.
+
+### Experimental Feed Mode
+
+Feed mode is experimental. It is intended for users who want the battery to
+provide a base grid-connected output, especially where there is no smart
+meter/CT feedback available for normal zero-feed control.
+
+The **Base Feed Power** slider is passive. Moving the slider only stores the
+target value in Home Assistant. Nothing is sent to the battery until you select
+**Feed** from the Operating Mode dropdown.
+
+When Feed is selected, the integration writes the local base feed/discharge
+register discovered from the AEC Cloud app's **Battery base grid-connected
+power** setting.
+
+This is not the same as the normal Discharge mode:
+
+- Discharge uses a manual schedule slot and takes over the battery.
+- Feed stays closer to the EMS/grid-connected behaviour and applies a base
+  feed target.
+- Actual output may be higher or lower than the slider value.
+- On systems with a smart meter or CT clamp, the EMS may adjust output while it
+  continues managing grid flow.
+- On systems without smart meter feedback, it may behave more like a fixed
+  discharge target.
+
+To stop Feed mode, select **Self-Gen/Zero Export**. The integration clears the
+base feed value when returning to Self-Gen.
 
 ## Output Limit Notes
 

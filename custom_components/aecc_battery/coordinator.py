@@ -32,6 +32,8 @@ from .const import (
     MODE_DISABLED,
     MODE_REGISTERS,
     MODE_SELF_CONSUMPTION,
+    REG_BASE_DISCHARGE_ENABLE,
+    REG_BASE_DISCHARGE_POWER,
     POLL_INTERVAL,
     REG_AI_SMART_CHARGE,
     REG_AI_SMART_DISC,
@@ -167,6 +169,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.commanded_operating_mode: str | None = None
         self.commanded_charge_power: int = 800
         self.commanded_discharge_power: int = 800
+        self.commanded_feed_power: int = 0
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
         self.manual_overnight_target_soc: int = 80
         self.overnight_charging_mode: str = overnight_charging_mode
@@ -215,6 +218,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.initial_min_soc: int | None = None
         self.initial_max_soc: int | None = None
         self.initial_surplus_charge_trigger: int | None = None
+        self.initial_base_discharge_power: int | None = None
         self.initial_max_feed_power: int | None = None
         self.initial_work_mode: str | None = None
         self.initial_power: int | None = None
@@ -1669,6 +1673,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         clear_manual_payload = {
             REG_CONTROL_TIME1: SLOT_DISABLED,
             REG_CUSTOM_MODE: "0",
+            REG_BASE_DISCHARGE_POWER: "0",
         }
 
         restore_ai_payload = {
@@ -1678,6 +1683,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_AI_SMART_DISC: "1",
             REG_CUSTOM_MODE: "0",
             REG_CONTROL_TIME1: SLOT_DISABLED,
+            REG_BASE_DISCHARGE_POWER: "0",
         }
 
         _LOGGER.info(
@@ -1701,6 +1707,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._commanded_work_mode = MODE_SELF_CONSUMPTION
                 self._commanded_direction = "Idle"
                 self.commanded_operating_mode = "Self-Gen/Zero Export"
+                self.commanded_feed_power = 0
                 return True
 
             if attempt < 3:
@@ -1719,6 +1726,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_AI_SMART_CHARGE: "1",
             REG_AI_SMART_DISC: "1",
             REG_CUSTOM_MODE: "0",
+            REG_BASE_DISCHARGE_POWER: "0",
         }
 
         _LOGGER.info("SET stock self-consumption -> registers=%s", payload)
@@ -1728,6 +1736,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._commanded_work_mode = MODE_SELF_CONSUMPTION
             self._commanded_direction = "Idle"
             self.commanded_operating_mode = "Self-Gen/Zero Export"
+            self.commanded_feed_power = 0
 
         return success
 
@@ -1745,6 +1754,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_AI_SMART_DISC: "1",
             REG_CUSTOM_MODE: "0",
             REG_CONTROL_TIME1: SLOT_DISABLED,
+            REG_BASE_DISCHARGE_POWER: "0",
         }
 
         _LOGGER.info("SET schedule-3 self-consumption -> registers=%s", payload)
@@ -1754,7 +1764,37 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._commanded_work_mode = MODE_SELF_CONSUMPTION
             self._commanded_direction = "Idle"
             self.commanded_operating_mode = "Self-Gen/Zero Export"
+            self.commanded_feed_power = 0
 
+        return success
+
+    async def async_set_feed_power(self, power_w: int) -> bool:
+        """Set the local base grid-connected feed/discharge power.
+
+        This uses the EMS/custom base-feed path exposed by the cloud app as
+        "Battery base grid-connected power". It is intentionally separate from
+        the manual schedule Discharge mode.
+        """
+        feed_w = max(0, min(int(power_w), MAX_REGISTER_POWER_DEFAULT))
+        payload = {
+            REG_EMS_ENABLE: "1",
+            REG_SCHEDULE_MODE: "3",
+            REG_AI_SMART_CHARGE: "0",
+            REG_AI_SMART_DISC: "0",
+            REG_BASE_DISCHARGE_ENABLE: "1",
+            REG_BASE_DISCHARGE_POWER: str(feed_w),
+            REG_CUSTOM_MODE: "1",
+            REG_CONTROL_TIME1: SLOT_DISABLED,
+        }
+
+        _LOGGER.info("SET feed/base discharge power=%d W -> register 3026", feed_w)
+        success = await self._logged_write(payload, f"feed_power({feed_w}W)")
+        if success:
+            self.commanded_feed_power = feed_w
+            self._commanded_power = feed_w
+            self._commanded_direction = "Feed"
+            self._commanded_work_mode = MODE_CUSTOM
+            self.commanded_operating_mode = "Feed"
         return success
 
     async def async_set_work_mode(self, mode: str) -> bool:
@@ -1800,6 +1840,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 int(REG_AI_SMART_DISC),
                 int(REG_MIN_SOC),
                 int(REG_MAX_SOC),
+                int(REG_BASE_DISCHARGE_POWER),
+                int(REG_BASE_DISCHARGE_ENABLE),
                 int(REG_SURPLUS_CHARGE_TRIGGER),
                 int(REG_CUSTOM_MODE),
                 int(REG_MAX_FEED_POWER),
@@ -1824,7 +1866,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if val is None:
                 return None
             try:
-                return int(val)
+                return int(float(val))
             except (TypeError, ValueError):
                 return None
 
@@ -1834,6 +1876,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ai_charge = _int(REG_AI_SMART_CHARGE)
         ai_discharge = _int(REG_AI_SMART_DISC)
         custom_mode = _int(REG_CUSTOM_MODE)
+        base_discharge_power = _int(REG_BASE_DISCHARGE_POWER)
         surplus_charge_trigger = _int(REG_SURPLUS_CHARGE_TRIGGER)
         max_feed_power = _int(REG_MAX_FEED_POWER)
 
@@ -1850,6 +1893,13 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info(
                 "Read initial PV surplus charge trigger register 3037: %d W",
                 surplus_charge_trigger,
+            )
+        if base_discharge_power is not None:
+            self.initial_base_discharge_power = max(0, base_discharge_power)
+            self.commanded_feed_power = self.initial_base_discharge_power
+            _LOGGER.info(
+                "Read initial base feed/discharge power register 3026: %d W",
+                self.initial_base_discharge_power,
             )
         if max_feed_power is not None:
             self.initial_max_feed_power = max_feed_power
@@ -1892,6 +1942,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self.initial_work_mode:
             self._commanded_work_mode = self.initial_work_mode
             _LOGGER.info("Read initial work mode: %s", self.initial_work_mode)
+
+        if self.initial_base_discharge_power and self.initial_base_discharge_power > 0:
+            self.initial_power = self.initial_base_discharge_power
+            self._commanded_power = self.initial_base_discharge_power
+            self._commanded_direction = "Feed"
+            self.commanded_operating_mode = "Feed"
+            _LOGGER.info(
+                "Initial base feed/discharge power is active: %d W",
+                self.initial_base_discharge_power,
+            )
 
     async def async_probe_device_management(self) -> None:
         info = await self.client.get_device_management_info()

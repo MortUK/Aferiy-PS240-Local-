@@ -79,6 +79,7 @@ def test_ps240_self_gen_restore_uses_known_good_schedule3_pattern() -> None:
         "3020": "3",
         "3021": "0",
         "3022": "1",
+        "3026": "0",
         "3030": "0",
         "3003": "0,00:00,00:00,0,0,0,0,0,0,100,10",
     }
@@ -94,6 +95,7 @@ def test_ps240_self_gen_restore_clears_manual_slot_first() -> None:
 
     assert payload == {
         "3003": "0,00:00,00:00,0,0,0,0,0,0,100,10",
+        "3026": "0",
         "3030": "0",
     }
 
@@ -131,6 +133,7 @@ def test_diagnostics_labels_control_registers_we_care_about() -> None:
         "AI smart discharge (3022)",
         "Min SOC (3023)",
         "Max SOC (3024)",
+        "Base feed power (3026)",
         "Custom mode (3030)",
         "Max feed power (3039)",
     ):

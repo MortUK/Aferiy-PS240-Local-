@@ -158,6 +158,8 @@ REG_CONTROL_TIME2 = "3004"  # Second active time slot
 
 REG_MIN_SOC = "3023"  # Minimum discharge SOC
 REG_MAX_SOC = "3024"  # Maximum charge SOC
+REG_BASE_DISCHARGE_POWER = "3026"  # Base grid-connected feed/discharge power (W)
+REG_BASE_DISCHARGE_ENABLE = "3029"  # Enables base grid-connected feed/discharge behavior
 REG_SURPLUS_CHARGE_TRIGGER = "3037"  # PV surplus trigger for grid-connected charging (W)
 REG_MAX_FEED_POWER = "3039"  # Max feed power in W; read/write depends on integration logic
 

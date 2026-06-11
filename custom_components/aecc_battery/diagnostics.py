@@ -30,6 +30,7 @@ from .const import (
     DOMAIN,
     REG_AI_SMART_CHARGE,
     REG_AI_SMART_DISC,
+    REG_BASE_DISCHARGE_POWER,
     REG_CONTROL_TIME1,
     REG_CONTROL_TIME2,
     REG_CUSTOM_MODE,
@@ -101,6 +102,7 @@ _KEY_REGISTER_LABELS: dict[str, str] = {
     REG_AI_SMART_DISC: "AI smart discharge (3022)",
     REG_MIN_SOC: "Min SOC (3023)",
     REG_MAX_SOC: "Max SOC (3024)",
+    REG_BASE_DISCHARGE_POWER: "Base feed power (3026)",
     REG_CUSTOM_MODE: "Custom mode (3030)",
     REG_MAX_FEED_POWER: "Max feed power (3039)",
 }
