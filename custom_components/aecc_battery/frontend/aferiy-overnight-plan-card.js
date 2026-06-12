@@ -124,6 +124,13 @@ class AferiyOvernightPlanCard extends HTMLElement {
     const smartHistoryText = smartHistory && this._isKnown(smartHistory.state)
       ? `${Math.round(Number(smartHistory.state))}% complete`
       : "Waiting";
+    const expectedEndSocRaw = Number(
+      breakdown.expected_end_of_peak_soc ?? attrs.expected_end_of_peak_soc,
+    );
+    const expectedEndSoc = Number.isFinite(expectedEndSocRaw)
+      ? this._numberText(expectedEndSocRaw, 0, "%")
+      : "";
+    const tuning = this._tuningText(attrs, breakdown);
 
     this.innerHTML = `
       <ha-card>
@@ -248,9 +255,11 @@ class AferiyOvernightPlanCard extends HTMLElement {
           <div><b>Battery need:</b> ${this._escape(requiredNeed)} peak deficit${losses ? ` · ${this._escape(losses)} losses` : ""} · ${this._escape(buffer)} buffer</div>
           ${cheapTopupExtra ? `<div><b>Cheap-rate top-up:</b> ${this._escape(cheapTopupExtra)} extra${solarHeadroom ? ` · leaves ${this._escape(solarHeadroom)} for solar` : ""}${solarSurplus ? ` · ${this._escape(solarSurplus)} forecast surplus` : ""}</div>` : ""}
           <div><b>Shortfall:</b> Pre-sunrise need ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset need ${this._escape(postSunset)}</div>
+          ${expectedEndSoc ? `<div><b>Expected SOC at next off-peak:</b> ${this._escape(expectedEndSoc)}</div>` : ""}
           <div><b>Useful solar:</b> ${this._escape(usefulSolar)}</div>
           <div><b>Confidence:</b> ${this._escape(confidence)} · History ${this._escape(history)}</div>
           <div><b>Smart History:</b> ${this._escape(smartHistoryText)}</div>
+          ${tuning ? `<div><b>Tuning:</b> ${this._escape(tuning)}</div>` : ""}
         </div>
       </ha-card>
     `;
@@ -437,6 +446,25 @@ class AferiyOvernightPlanCard extends HTMLElement {
     }
 
     return Number.NaN;
+  }
+
+  _tuningText(attrs, breakdown) {
+    const solar = Number(
+      breakdown.smart_solar_forecast_scale_percent
+      ?? attrs.smart_solar_forecast_scale_percent,
+    );
+    const demand = Number(
+      breakdown.smart_house_demand_scale_percent
+      ?? attrs.smart_house_demand_scale_percent,
+    );
+    const parts = [];
+    if (Number.isFinite(solar) && Math.round(solar) !== 100) {
+      parts.push(`solar ${Math.round(solar)}%`);
+    }
+    if (Number.isFinite(demand) && Math.round(demand) !== 100) {
+      parts.push(`house demand ${Math.round(demand)}%`);
+    }
+    return parts.join(" · ");
   }
 
   _usableCapacityKwh(attrs, breakdown) {

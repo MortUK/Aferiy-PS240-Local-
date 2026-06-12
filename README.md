@@ -3,7 +3,7 @@
 ![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.jpeg)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.7.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.7.1-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-RichardOwen-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/richardowen)
@@ -101,6 +101,10 @@ required.
 - Watches System Average Battery SOC during the cheap-rate window.
 - Starts charging if SOC falls to or below the target.
 - Holds/pauses once the target is reached.
+- Re-checks the SMART target during off-peak and may raise the locked target if
+  the live recommendation has increased materially. It does not lower the locked
+  target mid-window, so the system avoids twitchy behaviour and can still carry
+  useful cheap-rate energy forward on low-solar days.
 - Restores Self-Gen/Zero Export five minutes before off-peak ends, because the
   PS240 can take a few minutes to move cleanly from grid charging back to normal
   battery behaviour.
@@ -126,6 +130,18 @@ Recommended Overnight SOC is calculated from:
 - **A small buffer and confidence adjustment**, so stale forecast data or weak
   demand history makes the target safer rather than optimistic.
 
+Two optional SMART tuning sliders are available under Configuration:
+
+- **SMART Solar Forecast** lets you gently scale the Solcast forecast up or down
+  if your real system consistently produces more or less than Solcast expects.
+- **SMART House Demand** lets you gently scale the house demand estimate up or
+  down if the recommendation is consistently too cautious or too light.
+
+Leave both at 100% to use the normal calculation. On low-solar or close-call
+days, the planner may deliberately charge more overnight so cheap-rate energy is
+carried forward, while still leaving enough battery space for the solar that is
+forecast to arrive.
+
 The integration also includes a **Solar Availability** dropdown. Set it to Solar
 Unavailable when panels are covered, disconnected, or otherwise unable to
 generate. The overnight calculation will then treat the solar forecast as 0 kWh
@@ -147,7 +163,8 @@ needed.
 The integration includes a bundled **AFERIY Overnight Plan** Lovelace card that
 shows the smart overnight target, battery capacity, demand versus solar balance,
 Pre-Sunrise Need, Post-Sunset Need, useful solar time, forecast confidence, and
-SMART History completeness.
+SMART History completeness. It also shows expected reserve before the next
+off-peak window and any SMART forecast/demand tuning that has been applied.
 
 ![AFERIY Overnight Plan dashboard card](docs/images/aferiy-overnight-plan-card.png)
 

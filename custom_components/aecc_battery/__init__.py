@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
@@ -48,6 +49,10 @@ SERVICE_SNAPSHOT_CONTROL_REGISTERS = "snapshot_control_registers"
 SERVICE_SNAPSHOT_POWER_FLOW = "snapshot_power_flow"
 SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION = "restore_original_self_consumption"
 SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION = "restore_schedule_3_self_consumption"
+OBSOLETE_EXPLORATION_SERVICES = (
+    "snapshot_pv_inputs",
+    "snapshot_device_management",
+)
 MAX_SNAPSHOT_REGISTER_COUNT = 250
 FRONTEND_PATH = Path(__file__).parent / "frontend"
 FRONTEND_URL = "/aecc_battery_static"
@@ -252,17 +257,71 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_probe_device_management()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    for suffix in ("pv_input_snapshot", "device_management_snapshot"):
+        hass.states.async_remove(f"sensor.{slugify(name)}_{suffix}")
     await _async_register_frontend(hass)
     _async_remove_old_per_battery_entities(hass, entry)
     _async_remove_stale_battery_soc_entities(hass, entry, coordinator)
     _async_remove_withdrawn_config_entities(hass, entry)
     _async_remove_disabled_advanced_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _async_remove_empty_legacy_ip_device(hass, entry, coordinator)
     _async_register_services(hass)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     _LOGGER.info("AECC Battery '%s' (%s) set up at %s:%s", name, manufacturer, host, port)
     return True
+
+
+def _async_remove_empty_legacy_ip_device(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: AeccBatteryCoordinator,
+) -> None:
+    """Remove the empty IP-identified device left after serial discovery."""
+    if not coordinator.device_serial:
+        return
+
+    device_registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+    legacy_identifier = (
+        DOMAIN,
+        f"{coordinator.client.host}:{coordinator.client.port}",
+    )
+    serial_identifier = (DOMAIN, coordinator.device_serial)
+    legacy_device = device_registry.async_get_device(
+        identifiers={legacy_identifier},
+    )
+    serial_device = device_registry.async_get_device(
+        identifiers={serial_identifier},
+    )
+
+    if (
+        legacy_device is None
+        or serial_device is None
+        or legacy_device.id == serial_device.id
+        or entry.entry_id not in legacy_device.config_entries
+    ):
+        return
+
+    legacy_entities = er.async_entries_for_device(
+        entity_registry,
+        legacy_device.id,
+    )
+    if legacy_entities:
+        _LOGGER.warning(
+            "Keeping legacy IP-based device %s because it still owns %s entities",
+            legacy_identifier[1],
+            len(legacy_entities),
+        )
+        return
+
+    device_registry.async_remove_device(legacy_device.id)
+    _LOGGER.info(
+        "Removed empty legacy IP-based device %s after migration to serial %s",
+        legacy_identifier[1],
+        coordinator.device_serial,
+    )
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
@@ -341,6 +400,8 @@ def _async_remove_withdrawn_config_entities(hass: HomeAssistant, entry: ConfigEn
         (Platform.SENSOR, f"{entry.entry_id}_battery_soc"),
         (Platform.SENSOR, f"{entry.entry_id}_local_unit_battery_soc"),
         (Platform.SENSOR, f"{entry.entry_id}_runtime_at_current_house_demand"),
+        (Platform.SENSOR, f"{entry.entry_id}_smart_overnight_accuracy"),
+        (Platform.SENSOR, f"{entry.entry_id}_smart_morning_accuracy"),
         (Platform.SWITCH, f"{entry.entry_id}_solar_unavailable"),
     )
     for platform, unique_id in withdrawn_entities:
@@ -382,6 +443,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 def _async_register_services(hass: HomeAssistant) -> None:
     """Register integration-level diagnostic services once."""
+    for service in OBSOLETE_EXPLORATION_SERVICES:
+        if hass.services.has_service(DOMAIN, service):
+            hass.services.async_remove(DOMAIN, service)
+
     if (
         hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_CONTROL_REGISTERS)
         and hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_POWER_FLOW)
@@ -666,6 +731,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION,
             async_restore_schedule_3_self_consumption,
         )
+
 
 def _diff_registers(
     previous: dict[str, Any] | None,

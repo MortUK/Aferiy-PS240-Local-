@@ -2,7 +2,18 @@
 
 ## Unreleased
 
-- No unreleased changes.
+No unreleased changes.
+
+## 1.7.1
+
+- Added a user-friendly Wi-Fi Signal sensor showing percentage, quality and raw dBm.
+- Removed the unused SMART Overnight Accuracy and SMART Morning Accuracy sensors.
+- Corrected SMART History completeness so known away or filtered days count as observed history without affecting the demand average.
+- Added SMART Solar Forecast and SMART House Demand configuration sliders so users can gently tune the overnight calculation when local behaviour differs from the forecast/history.
+- Added expected end-of-peak reserve and SMART tuning visibility to the bundled Overnight Plan card.
+- Added rolling SMART overnight re-checks that can raise, but not lower, the locked target during off-peak when the live recommendation materially increases.
+- Replaced the simplistic expected reserve calculation with a timed battery simulation that accounts for the battery reaching 100%, clipped solar surplus, and later evening demand.
+- Documented the low-solar behaviour: use cheap-rate energy when useful, while leaving room for forecast solar.
 
 ## 1.7.0
 

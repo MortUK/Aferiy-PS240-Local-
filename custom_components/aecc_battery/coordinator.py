@@ -55,6 +55,7 @@ from .tcp_client import AeccTcpClient
 
 _LOGGER = logging.getLogger(__name__)
 _RUNTIME_CONFIG_STORAGE_VERSION = 1
+_OVERNIGHT_ROLLING_RECHECK_MIN_INCREASE_SOC = 2
 
 # ── Unified field mapping ─────────────────────────────────────────────────────
 # Maps canonical sensor keys to (source, field_name, scale) tuples.
@@ -163,6 +164,19 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._failure_tolerance: int = 5
         self.device_serial: str | None = None
         self.firmware_version: str | None = None
+        self.device_model_code: str | None = None
+        self.device_hardware_version: str | None = None
+        self.device_clock: str | None = None
+        self.device_sdk_version: str | None = None
+        self.wifi_rssi_dbm: int | None = None
+        self.topology_device_count: int = 0
+        self.topology_reported_count: int = 0
+        self.inverter_count: int = 0
+        self.system_topology: list[dict[str, Any]] = []
+        self.master_serial: str | None = None
+        self.executor_serials: list[str] = []
+        self.meter_serial: str | None = None
+        self.meter_name: str | None = None
         self._commanded_power: int = 0
         self._commanded_direction: str = "Idle"
         self._commanded_work_mode: str | None = None
@@ -171,6 +185,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.commanded_discharge_power: int = 800
         self.commanded_feed_power: int = 0
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
+        self.smart_solar_forecast_scale: float = 1.0
+        self.smart_house_demand_scale: float = 1.0
         self.manual_overnight_target_soc: int = 80
         self.overnight_charging_mode: str = overnight_charging_mode
         self.off_peak_start: str = off_peak_start
@@ -202,6 +218,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overnight_locked_target_context: dict[str, Any] = {}
         self._overnight_locked_target_charged_during_window: bool = False
         self._overnight_locked_target_reached_threshold: bool = False
+        self._overnight_locked_target_recheck_count: int = 0
+        self._overnight_locked_target_last_recheck_at: datetime | None = None
         self._overnight_last_completed_plan: dict[str, Any] | None = None
         self._overnight_morning_accuracy: dict[str, Any] = {}
         self._overnight_accuracy_recorded_window_key: str | None = None
@@ -321,6 +339,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if capacity is not None and capacity > 0:
             self.battery_capacity_kwh = capacity
 
+        solar_scale = self._safe_float(data.get("smart_solar_forecast_scale"))
+        if solar_scale is not None:
+            self.smart_solar_forecast_scale = max(0.5, min(1.5, solar_scale))
+
+        demand_scale = self._safe_float(data.get("smart_house_demand_scale"))
+        if demand_scale is not None:
+            self.smart_house_demand_scale = max(0.5, min(1.5, demand_scale))
+
         manual_target = self._safe_int(data.get("manual_overnight_target_soc"))
         if manual_target is not None:
             self.manual_overnight_target_soc = max(10, min(100, manual_target))
@@ -365,6 +391,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         data = {
             "battery_capacity_kwh": round(float(self.battery_capacity_kwh), 3),
+            "smart_solar_forecast_scale": round(float(self.smart_solar_forecast_scale), 3),
+            "smart_house_demand_scale": round(float(self.smart_house_demand_scale), 3),
             "manual_overnight_target_soc": int(self.manual_overnight_target_soc),
             "overnight_charging_mode": self.overnight_charging_mode,
             "smart_tariff_preset": self.smart_tariff_preset,
@@ -430,6 +458,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return []
         entries = self.data.get("Storage_list") or []
         return [entry for entry in entries if isinstance(entry, dict)]
+
+    def device_role_for_serial(self, serial: Any) -> str | None:
+        """Return the topology role reported for a storage serial."""
+        clean_serial = str(serial or "").strip()
+        if not clean_serial:
+            return None
+        for device in self.system_topology:
+            if device.get("serial") == clean_serial:
+                return str(device.get("role") or "") or None
+        return None
 
     @property
     def summary(self) -> dict[str, Any]:
@@ -650,6 +688,17 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Last completed SMART overnight charge accuracy review."""
         return dict(self._overnight_accuracy_status)
 
+    @property
+    def morning_accuracy_status(self) -> dict[str, Any]:
+        """Current or last SMART morning bridge accuracy review."""
+        if self._overnight_morning_accuracy:
+            return dict(self._overnight_morning_accuracy)
+        return {
+            "state": None,
+            "result": "waiting",
+            "reason": "Waiting for a completed SMART morning bridge calculation.",
+        }
+
     def _set_overnight_off_status(self) -> None:
         """Make the overnight status reflect a disabled scheduler immediately."""
         self._overnight_status = {
@@ -709,9 +758,6 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _schedule_overnight_evaluation(self) -> None:
         """Queue one scheduler pass after fresh data without blocking polling."""
-        if self.overnight_charging_mode == OVERNIGHT_CHARGE_MODE_DISABLED:
-            self._set_overnight_off_status()
-            return
         if self._overnight_task is not None and not self._overnight_task.done():
             return
         self._overnight_task = self.hass.async_create_task(
@@ -721,16 +767,15 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_evaluate_overnight_charging(self) -> None:
         """Apply the local overnight charge-to-target decision tree."""
         mode = self.overnight_charging_mode
-        if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
-            self._set_overnight_off_status()
-            return
-
         now = dt_util.now()
         window = self._overnight_window(now)
         live_target_soc, live_target_source = self._overnight_target_soc(mode)
         current_soc = self._safe_float(self.get_value("average_battery_soc"))
         self._track_morning_accuracy(now)
         self._record_overnight_accuracy_if_due(now, window)
+        if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
+            self._set_overnight_off_status()
+            return
         if self._overnight_last_window_key != window["key"]:
             self._overnight_last_window_key = window["key"]
             self._overnight_scheduler_started_charge = False
@@ -767,6 +812,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             and self._overnight_locked_target_window_key == window["key"]
             and self._overnight_locked_target_soc is not None
         ):
+            self._maybe_roll_overnight_target(
+                live_target_soc,
+                live_target_source,
+                current_soc,
+            )
             target_soc = self._overnight_locked_target_soc
             target_source = self._overnight_locked_target_source or live_target_source
         else:
@@ -802,6 +852,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._overnight_locked_target_at.isoformat()
                 if self._overnight_locked_target_window_key == window["key"]
                 and self._overnight_locked_target_at
+                else None
+            ),
+            "rolling_recheck_min_increase_soc": _OVERNIGHT_ROLLING_RECHECK_MIN_INCREASE_SOC,
+            "rolling_recheck_count": self._overnight_locked_target_recheck_count
+            if self._overnight_locked_target_window_key == window["key"]
+            else 0,
+            "rolling_recheck_last_at": (
+                self._overnight_locked_target_last_recheck_at.isoformat()
+                if self._overnight_locked_target_window_key == window["key"]
+                and self._overnight_locked_target_last_recheck_at
                 else None
             ),
             "current_soc": round(current_soc, 1) if current_soc is not None else None,
@@ -1009,6 +1069,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overnight_locked_target_context = {}
         self._overnight_locked_target_charged_during_window = False
         self._overnight_locked_target_reached_threshold = False
+        self._overnight_locked_target_recheck_count = 0
+        self._overnight_locked_target_last_recheck_at = None
 
     def _remember_overnight_plan(self) -> None:
         if (
@@ -1025,9 +1087,51 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else None,
             "charged_during_window": self._overnight_locked_target_charged_during_window,
             "reached_or_below_target": self._overnight_locked_target_reached_threshold,
+            "rolling_recheck_count": self._overnight_locked_target_recheck_count,
+            "rolling_recheck_last_at": self._overnight_locked_target_last_recheck_at.isoformat()
+            if self._overnight_locked_target_last_recheck_at
+            else None,
             **self._overnight_locked_target_context,
         }
         self._ensure_morning_accuracy_tracker(self._overnight_last_completed_plan)
+
+    def _maybe_roll_overnight_target(
+        self,
+        live_target_soc: int | None,
+        live_target_source: str,
+        current_soc: float | None,
+    ) -> None:
+        """Raise the locked SMART target during off-peak if the plan worsens materially."""
+        if live_target_soc is None or self._overnight_locked_target_soc is None:
+            return
+
+        locked = int(self._overnight_locked_target_soc)
+        increase = int(live_target_soc) - locked
+        if increase < _OVERNIGHT_ROLLING_RECHECK_MIN_INCREASE_SOC:
+            return
+
+        previous_context = dict(self._overnight_locked_target_context)
+        new_context = self._snapshot_overnight_target_context()
+        new_context["soc_at_target_lock"] = previous_context.get("soc_at_target_lock")
+        new_context["started_above_target"] = previous_context.get(
+            "started_above_target",
+            bool(current_soc is not None and current_soc > live_target_soc),
+        )
+        new_context["rolling_recheck_previous_target_soc"] = locked
+        new_context["rolling_recheck_latest_target_soc"] = int(live_target_soc)
+        new_context["rolling_recheck_increase_soc"] = increase
+        new_context["rolling_recheck_reason"] = (
+            "SMART target increased during off-peak, so the locked target was raised. "
+            "Targets are only raised, not lowered, to avoid twitchy behaviour."
+        )
+
+        self._overnight_locked_target_soc = int(live_target_soc)
+        self._overnight_locked_target_source = live_target_source
+        self._overnight_locked_target_context = new_context
+        self._overnight_locked_target_recheck_count += 1
+        self._overnight_locked_target_last_recheck_at = datetime.now(UTC)
+        if current_soc is not None and current_soc <= live_target_soc:
+            self._overnight_locked_target_reached_threshold = True
 
     def _snapshot_overnight_target_context(self) -> dict[str, Any]:
         state = self.hass.states.get(self._recommended_overnight_soc_entity_id())
@@ -1954,12 +2058,19 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
     async def async_probe_device_management(self) -> None:
+        """Refresh safe device identity, topology and health metadata."""
         info = await self.client.get_device_management_info()
         if info is None:
             _LOGGER.debug("DeviceManagement probe returned nothing (not supported on all AECC devices)")
             return
 
-        params = info.get("DeviceManagementInfo") or info.get("Parameters") or info.get("GetParameters") or {}
+        params = (
+            info.get("DeviceManagementInfo")
+            or info.get("ControlInfo")
+            or info.get("Parameters")
+            or info.get("GetParameters")
+            or {}
+        )
         if not isinstance(params, dict):
             _LOGGER.debug(
                 "DeviceManagement params unexpected type: %s, response keys: %s",
@@ -1969,11 +2080,113 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         serial = params.get("8") or params.get(8)
+        model_code = params.get("20") or params.get(20)
         firmware = params.get("21") or params.get(21)
+        hardware = params.get("22") or params.get(22)
+        device_clock = params.get("31") or params.get(31)
+        sdk_version = params.get("61") or params.get(61)
+        wifi_rssi = params.get("76") or params.get(76)
 
         if serial:
             self.device_serial = str(serial).strip()
             _LOGGER.info("DeviceManagement serial: %s", self.device_serial)
+        if model_code:
+            self.device_model_code = str(model_code).strip()
         if firmware:
             self.firmware_version = str(firmware).strip()
             _LOGGER.info("DeviceManagement firmware: %s", self.firmware_version)
+        if hardware:
+            self.device_hardware_version = str(hardware).strip()
+        if device_clock:
+            self.device_clock = str(device_clock).strip()
+        if sdk_version:
+            self.device_sdk_version = str(sdk_version).strip()
+        try:
+            self.wifi_rssi_dbm = int(float(wifi_rssi)) if wifi_rssi is not None else None
+        except (TypeError, ValueError):
+            self.wifi_rssi_dbm = None
+
+        topology_value = params.get("102") or params.get(102)
+        topology: list[dict[str, Any]] = []
+        if isinstance(topology_value, dict):
+            devices = topology_value.get("DeviceList") or []
+            if isinstance(devices, list):
+                role_by_class = {
+                    1: "Master",
+                    2: "Executor",
+                    50: "Smart meter",
+                    245: "Auxiliary",
+                    254: "Auxiliary",
+                }
+                for device in devices:
+                    if not isinstance(device, dict):
+                        continue
+                    try:
+                        device_class = int(device.get("deviceClass"))
+                    except (TypeError, ValueError):
+                        device_class = None
+                    device_serial = str(device.get("SN") or "").strip()
+                    topology.append(
+                        {
+                            "role": role_by_class.get(device_class, "Unknown"),
+                            "device_class": device_class,
+                            "serial": device_serial or None,
+                            "pair_status": device.get("PairStatus"),
+                        }
+                    )
+            try:
+                self.topology_reported_count = int(
+                    topology_value.get("DeviceNum", len(topology))
+                )
+            except (TypeError, ValueError):
+                self.topology_reported_count = len(topology)
+        else:
+            self.topology_reported_count = 0
+
+        self.system_topology = topology
+        self.topology_device_count = sum(
+            1 for device in topology if device.get("serial")
+        )
+        self.inverter_count = sum(
+            1
+            for device in topology
+            if device.get("role") in ("Master", "Executor")
+            and device.get("serial")
+        )
+        self.master_serial = next(
+            (
+                str(device["serial"])
+                for device in topology
+                if device.get("role") == "Master" and device.get("serial")
+            ),
+            self.device_serial,
+        )
+        self.executor_serials = [
+            str(device["serial"])
+            for device in topology
+            if device.get("role") == "Executor" and device.get("serial")
+        ]
+        self.meter_serial = next(
+            (
+                str(device["serial"])
+                for device in topology
+                if device.get("role") == "Smart meter" and device.get("serial")
+            ),
+            None,
+        )
+
+        meter_value = params.get("121") or params.get(121)
+        if isinstance(meter_value, dict):
+            meter_list = meter_value.get("ThirdPartyDevList") or []
+            if isinstance(meter_list, list) and meter_list:
+                meter = meter_list[0]
+                if isinstance(meter, dict):
+                    self.meter_name = str(meter.get("InstanceName") or "").strip() or None
+
+        if topology:
+            _LOGGER.info(
+                "DeviceManagement topology: master=%s executors=%s meter=%s",
+                self.master_serial,
+                self.executor_serials,
+                self.meter_name or self.meter_serial,
+            )

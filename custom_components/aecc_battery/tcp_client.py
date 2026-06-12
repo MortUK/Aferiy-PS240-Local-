@@ -13,6 +13,19 @@ _LOGGER = logging.getLogger(__name__)
 
 _GET_TIMEOUT = 10
 
+_SAFE_DEVICE_MANAGEMENT_REGISTERS = [
+    8,    # Master serial
+    20,   # Model code
+    21,   # Firmware version
+    22,   # Hardware/protocol version
+    31,   # Device clock
+    61,   # ESP-IDF version
+    76,   # Wi-Fi RSSI
+    102,  # Paired device topology
+    120,  # Third-party meter identity
+    121,  # Third-party meter connection
+]
+
 
 class AeccTcpClient:
     def __init__(self, host: str, port: int, timeout: float = 5.0) -> None:
@@ -57,16 +70,17 @@ class AeccTcpClient:
         return await self._get("DeviceManagement", {"RegDeviceManagementAddr": reg_addr})
 
     async def get_device_management_info(self) -> dict[str, Any] | None:
-        """Read serial, firmware, model from DeviceManagement registers.
+        """Read a fixed, non-sensitive DeviceManagement diagnostic set.
 
         Works on some AECC devices (e.g. Sunpura); times out on others (e.g. Lunergy).
-        Uses a short 3-second timeout to avoid blocking setup.
+        The allowlist intentionally excludes Wi-Fi name, password and local key
+        registers. Uses a short timeout to avoid blocking setup.
         """
         payload: dict[str, Any] = {
             "Get": "DeviceManagement",
             "SerialNumber": self._next_serial(),
             "CommandSource": "HA",
-            "RegDeviceManagementAddr": [2, 8, 9, 20, 21],
+            "RegDeviceManagementAddr": _SAFE_DEVICE_MANAGEMENT_REGISTERS,
         }
         async with self._io_lock:
             try:
@@ -75,7 +89,7 @@ class AeccTcpClient:
                 writer.write((json.dumps(payload) + "\n").encode("utf-8"))
                 await writer.drain()
                 buffer = b""
-                async with asyncio.timeout(3):
+                async with asyncio.timeout(5):
                     while True:
                         chunk = await reader.read(4096)
                         if not chunk:

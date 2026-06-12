@@ -325,8 +325,6 @@ async def async_setup_entry(
     entities.append(AeccLastCommandResultSensor(coordinator, config_entry))
     entities.append(AeccAutomaticOvernightChargingStatusSensor(coordinator, config_entry))
     entities.append(AeccSmartHistorySensor(coordinator, config_entry))
-    entities.append(AeccSmartOvernightAccuracySensor(coordinator, config_entry))
-    entities.append(AeccSmartMorningAccuracySensor(coordinator, config_entry))
 
     entities.append(AeccEstimatedHouseDemandSensor(coordinator, config_entry))
     entities.append(AeccHouseDemandEnergySensor(coordinator, config_entry))
@@ -334,6 +332,7 @@ async def async_setup_entry(
     entities.append(AeccRecommendedOvernightSocSensor(coordinator, config_entry))
 
     entities.append(AeccFirmwareSensor(coordinator, config_entry))
+    entities.append(AeccWifiSignalSensor(coordinator, config_entry))
 
     async_add_entities(entities)
 
@@ -544,10 +543,18 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreE
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        entry = (
+            self.coordinator.storage_entries[self._index]
+            if self._index < len(self.coordinator.storage_entries)
+            else {}
+        )
+        serial = str(entry.get("StorageSN") or "").strip() or None
         return {
             "source": f"Storage_list[{self._index}]",
             "source_field": self._field,
             "battery_index": self._index + 1,
+            "serial": serial,
+            "system_role": self.coordinator.device_role_for_serial(serial),
             "available_unit_count": len(self.coordinator.storage_entries),
             "raw_value": self._raw_value(),
             "last_accepted_value": self._last_value,
@@ -1136,9 +1143,14 @@ class AeccSmartHistorySensor(
     def _history_percent(attrs: dict[str, Any]) -> int:
         lookback_days = int(_as_float(attrs.get("recorder_history_lookback_days"), 14) or 14)
         valid_days = int(_as_float(attrs.get("recorder_history_valid_days"), 0) or 0)
+        rejected_days = int(_as_float(attrs.get("recorder_history_rejected_days"), 0) or 0)
+        skipped_away_days = attrs.get("recorder_history_skipped_away_days", [])
+        if not isinstance(skipped_away_days, list):
+            skipped_away_days = []
         if lookback_days <= 0:
             return 0
-        return int(max(0, min(100, round(valid_days / lookback_days * 100))))
+        observed_days = valid_days + rejected_days + len(skipped_away_days)
+        return int(max(0, min(100, round(observed_days / lookback_days * 100))))
 
     @staticmethod
     def _history_attrs(attrs: dict[str, Any], percent: int) -> dict[str, Any]:
@@ -1154,6 +1166,10 @@ class AeccSmartHistorySensor(
             rejected_days = []
         if not isinstance(skipped_away_days, list):
             skipped_away_days = []
+        observed_days = min(
+            lookback_days,
+            valid_days + len(rejected_days) + len(skipped_away_days),
+        )
 
         if percent >= 100:
             completeness = "complete"
@@ -1167,8 +1183,10 @@ class AeccSmartHistorySensor(
         return {
             "status": completeness,
             "recorder_history_status": status,
-            "valid_history_days": valid_days,
+            "observed_history_days": observed_days,
+            "model_history_days": valid_days,
             "lookback_days": lookback_days,
+            "missing_history_days": max(0, lookback_days - observed_days),
             "rejected_days": attrs.get("recorder_history_rejected_days"),
             "skipped_away_days": len(skipped_away_days),
             "accepted_history_days": accepted_days,
@@ -1182,94 +1200,12 @@ class AeccSmartHistorySensor(
             "history_demand_w": attrs.get("recorder_history_demand_w"),
             "history_energy_kwh": attrs.get("recorder_history_energy_kwh"),
             "reason": attrs.get("recorder_history_reason"),
-            "basis": "valid_non_empty_house_usage_days_in_14_day_recorder_history",
+            "basis": "observed_days_in_14_day_recorder_history",
             "note": (
-                "SMART overnight charging becomes more personalised as valid usage days build up. "
-                "If source data is unavailable, valid days age out of the 14-day window."
+                "Away and filtered days count as observed history but are not used in the demand average. "
+                "Missing source data reduces completeness as it moves through the 14-day window."
             ),
         }
-
-
-class AeccSmartOvernightAccuracySensor(
-    AeccRecorderLeanMixin,
-    CoordinatorEntity[AeccBatteryCoordinator],
-    SensorEntity,
-):
-    """Last completed SMART overnight charge accuracy review."""
-
-    _attr_has_entity_name = True
-    _attr_name = "SMART Overnight Accuracy"
-    _attr_icon = "mdi:target-variant"
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_smart_overnight_accuracy"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def native_value(self) -> float | None:
-        value = self.coordinator.overnight_accuracy_status.get("state")
-        return _as_float(value)
-
-    @property
-    def available(self) -> bool:
-        return True
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return dict(self.coordinator.overnight_accuracy_status)
-
-
-class AeccSmartMorningAccuracySensor(
-    AeccRecorderLeanMixin,
-    CoordinatorEntity[AeccBatteryCoordinator],
-    SensorEntity,
-):
-    """Morning bridge accuracy from off-peak end until useful solar."""
-
-    _attr_has_entity_name = True
-    _attr_name = "SMART Morning Accuracy"
-    _attr_icon = "mdi:weather-sunset-up"
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_smart_morning_accuracy"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def native_value(self) -> float | None:
-        tracker = self.coordinator.overnight_accuracy_status.get("morning_need_accuracy")
-        if not isinstance(tracker, dict):
-            return None
-        return _as_float(tracker.get("state"))
-
-    @property
-    def available(self) -> bool:
-        return True
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        tracker = self.coordinator.overnight_accuracy_status.get("morning_need_accuracy")
-        if not isinstance(tracker, dict):
-            return {
-                "result": "waiting",
-                "reason": "Waiting for a completed SMART morning bridge calculation.",
-            }
-        return dict(tracker)
 
 
 class AeccBatteryStatusSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
@@ -3145,6 +3081,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         recorder_history_attrs = self._current_recorder_history_attrs(now)
         solar_unavailable = self._solar_unavailable_override()
         solar_unavailable_entity = self._solar_availability_entity_id()
+        solar_forecast_scale = self._smart_solar_forecast_scale()
+        house_demand_scale = self._smart_house_demand_scale()
 
         attrs: dict[str, Any] = {
             "calculated_at": now.isoformat(),
@@ -3161,6 +3099,10 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_unavailable_override": solar_unavailable,
             "solar_unavailable_entity": solar_unavailable_entity,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
+            "smart_solar_forecast_scale": solar_forecast_scale,
+            "smart_solar_forecast_scale_percent": round(solar_forecast_scale * 100),
+            "smart_house_demand_scale": house_demand_scale,
+            "smart_house_demand_scale_percent": round(house_demand_scale * 100),
             **fallback_attrs,
             **recorder_history_attrs,
         }
@@ -3171,7 +3113,13 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             return None, attrs
 
         projection = self._project_peak_window(start, end, now, fallback_demand_w, solar_unavailable)
-        attrs.update(projection)
+        attrs.update(
+            {
+                key: value
+                for key, value in projection.items()
+                if not key.startswith("_")
+            }
+        )
         forecast_health_attrs = self._solar_forecast_health_attrs(projection, now)
         confidence_adjustment_soc, confidence_attrs = self._confidence_adjustment_soc(
             projection,
@@ -3258,6 +3206,12 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             confidence_attrs,
             stale_guard_attrs,
         )
+        expected_end_soc = self._expected_end_soc_from_projection(
+            rounded_target_soc,
+            reserve_soc,
+            capacity_kwh,
+            projection,
+        )
 
         attrs.update(
             {
@@ -3290,6 +3244,16 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                 "target_soc_rounding_step": 1,
                 "minimum_target_soc": round(minimum_target_soc, 1),
                 "recommended_soc": rounded_target_soc,
+                "expected_end_of_peak_soc": (
+                    round(expected_end_soc, 1)
+                    if expected_end_soc is not None
+                    else None
+                ),
+                "expected_end_of_peak_soc_basis": (
+                    "timed_battery_simulation_with_full_battery_clipping"
+                    if expected_end_soc is not None
+                    else "unavailable_without_timed_forecast"
+                ),
                 "recommendation_reason": reason,
                 "status": "full_capacity_recommended" if rounded_target_soc >= 100 else "estimated",
                 **jump_attrs,
@@ -3589,13 +3553,31 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         solar_surplus_kwh = _as_float(projection.get("projected_solar_surplus_kwh"), 0.0) or 0.0
         buffer_soc = _as_float(buffer_attrs.get("dynamic_buffer_soc"), 0.0) or 0.0
         confidence_soc = _as_float(confidence_attrs.get("forecast_confidence_adjustment_soc"), 0.0) or 0.0
+        expected_end_soc = AeccRecommendedOvernightSocSensor._expected_end_soc_from_projection(
+            target_soc,
+            reserve_soc,
+            capacity_kwh,
+            projection,
+        )
 
         breakdown = {
             "target_soc": target_soc,
+            "expected_end_of_peak_soc": (
+                round(expected_end_soc, 1)
+                if expected_end_soc is not None
+                else None
+            ),
+            "expected_end_of_peak_soc_basis": (
+                "timed_battery_simulation_with_full_battery_clipping"
+                if expected_end_soc is not None
+                else "unavailable_without_timed_forecast"
+            ),
             "reserve_soc": round(reserve_soc, 1),
             "battery_capacity_kwh": round(capacity_kwh, 3),
             "projected_house_demand_kwh": round(projected_house_kwh, 3),
             "projected_solar_kwh": round(projected_solar_kwh, 3),
+            "smart_house_demand_scale_percent": projection.get("smart_house_demand_scale_percent"),
+            "smart_solar_forecast_scale_percent": projection.get("smart_solar_forecast_scale_percent"),
             "projected_solar_surplus_kwh": round(solar_surplus_kwh, 3),
             "pre_sunrise_need_kwh": round(pre_sunrise_need_kwh, 3),
             "pre_sunrise_net_need_kwh": round(pre_sunrise_net_need_kwh, 3),
@@ -3648,6 +3630,30 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "why_target": summary,
         }
 
+    @staticmethod
+    def _expected_end_soc_from_projection(
+        target_soc: float,
+        reserve_soc: float,
+        capacity_kwh: float,
+        projection: dict[str, Any],
+    ) -> float | None:
+        """Simulate SOC through the timed day, including full-battery clipping."""
+        segments = projection.get("_battery_flow_segments")
+        if not isinstance(segments, list) or capacity_kwh <= 0:
+            return None
+
+        reserve_kwh = capacity_kwh * reserve_soc / 100
+        stored_kwh = capacity_kwh * target_soc / 100
+        for net_energy_kwh in segments:
+            net = _as_float(net_energy_kwh)
+            if net is None:
+                continue
+            stored_kwh = min(
+                capacity_kwh,
+                max(reserve_kwh, stored_kwh + net),
+            )
+        return stored_kwh / capacity_kwh * 100
+
     def _target_jump_guard_attrs(self, target_soc: int, now: datetime) -> dict[str, Any]:
         local_date = now.astimezone().date().isoformat()
         previous = self._previous_recommended_soc
@@ -3682,6 +3688,18 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         return bool(getattr(self.coordinator, "solar_unavailable_override", False)) or self.hass.states.is_state(
             self._solar_availability_entity_id(),
             "Solar Unavailable",
+        )
+
+    def _smart_solar_forecast_scale(self) -> float:
+        return max(
+            0.5,
+            min(1.5, _as_float(getattr(self.coordinator, "smart_solar_forecast_scale", 1.0), 1.0) or 1.0),
+        )
+
+    def _smart_house_demand_scale(self) -> float:
+        return max(
+            0.5,
+            min(1.5, _as_float(getattr(self.coordinator, "smart_house_demand_scale", 1.0), 1.0) or 1.0),
         )
 
     def _solar_availability_entity_id(self) -> str:
@@ -3914,8 +3932,12 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             segment_end = min(end, current + interval)
             hours = (segment_end - current).total_seconds() / 3600
             demand_w, used_profile = self._demand_w_for_time(current, profile_start, profile, fallback_demand_w)
+            raw_demand_w = demand_w
+            demand_w *= self._smart_house_demand_scale()
             segment_demand_kwh = demand_w * hours / 1000
             segment_solar_kwh = self._solar_kwh_for_segment(current, segment_end, forecast_periods)
+            raw_segment_solar_kwh = segment_solar_kwh
+            segment_solar_kwh *= self._smart_solar_forecast_scale()
             solar_surplus_kwh += max(0.0, segment_solar_kwh - segment_demand_kwh)
             segment_solar_w = segment_solar_kwh * 1000 / hours if hours > 0 else 0.0
             if first_solar_start_at is None and segment_solar_w >= _RUNTIME_SOLAR_ACTIVE_THRESHOLD_W:
@@ -3937,6 +3959,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                     "end": segment_end,
                     "demand_kwh": segment_demand_kwh,
                     "solar_kwh": segment_solar_kwh,
+                    "raw_demand_w": raw_demand_w,
+                    "raw_solar_kwh": raw_segment_solar_kwh,
                     "solar_supports_load": solar_supports_morning,
                 }
             )
@@ -4031,6 +4055,10 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_forecast_path": None if solar_unavailable else self._forecast_cache_path,
             "projected_peak_house_demand_kwh": round(demand_kwh, 3),
             "projected_peak_solar_kwh": round(solar_kwh, 3),
+            "smart_house_demand_scale": self._smart_house_demand_scale(),
+            "smart_house_demand_scale_percent": round(self._smart_house_demand_scale() * 100),
+            "smart_solar_forecast_scale": self._smart_solar_forecast_scale(),
+            "smart_solar_forecast_scale_percent": round(self._smart_solar_forecast_scale() * 100),
             "projected_solar_surplus_kwh": round(solar_surplus_kwh, 3),
             "solar_unavailable_override": solar_unavailable,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
@@ -4097,6 +4125,10 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "demand_profile_buckets_used": profile_bucket_count,
             "fallback_demand_buckets_used": fallback_bucket_count,
             "fallback_demand_w": round(fallback_demand_w, 1),
+            "_battery_flow_segments": [
+                round(segment["solar_kwh"] - segment["demand_kwh"], 6)
+                for segment in segments
+            ],
         }
 
     def _fallback_projection_without_timed_forecast(
@@ -4107,10 +4139,13 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         fallback_demand_w: float,
         solar_unavailable: bool = False,
     ) -> dict[str, Any]:
-        peak_demand_kwh = self._project_demand_energy_kwh(start, end, now, fallback_demand_w)
+        demand_scale = self._smart_house_demand_scale()
+        solar_scale = self._smart_solar_forecast_scale()
+        peak_demand_kwh = self._project_demand_energy_kwh(start, end, now, fallback_demand_w) * demand_scale
         morning_end = min(end, start + timedelta(hours=5))
-        morning_gap_kwh = self._project_demand_energy_kwh(start, morning_end, now, fallback_demand_w)
-        forecast_kwh = 0.0 if solar_unavailable else (self._state_energy_kwh(_SOLCAST_TOMORROW_ENTITY) or 0.0)
+        morning_gap_kwh = self._project_demand_energy_kwh(start, morning_end, now, fallback_demand_w) * demand_scale
+        raw_forecast_kwh = 0.0 if solar_unavailable else (self._state_energy_kwh(_SOLCAST_TOMORROW_ENTITY) or 0.0)
+        forecast_kwh = raw_forecast_kwh * solar_scale
         daily_deficit_kwh = max(0.0, peak_demand_kwh - forecast_kwh)
         required_kwh = max(morning_gap_kwh, daily_deficit_kwh)
         return {
@@ -4118,6 +4153,11 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_forecast_source": "Solar Unavailable override" if solar_unavailable else _SOLCAST_TOMORROW_ENTITY,
             "projected_peak_house_demand_kwh": round(peak_demand_kwh, 3),
             "projected_peak_solar_kwh": round(forecast_kwh, 3),
+            "raw_projected_peak_solar_kwh": round(raw_forecast_kwh, 3),
+            "smart_house_demand_scale": demand_scale,
+            "smart_house_demand_scale_percent": round(demand_scale * 100),
+            "smart_solar_forecast_scale": solar_scale,
+            "smart_solar_forecast_scale_percent": round(solar_scale * 100),
             "projected_solar_surplus_kwh": None,
             "solar_unavailable_override": solar_unavailable,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
@@ -4316,3 +4356,89 @@ class AeccFirmwareSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity
     @property
     def native_value(self) -> str | None:
         return self.coordinator.firmware_version
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "device_serial": self.coordinator.device_serial,
+            "model_code": self.coordinator.device_model_code,
+            "hardware_version": self.coordinator.device_hardware_version,
+            "device_clock": self.coordinator.device_clock,
+            "sdk_version": self.coordinator.device_sdk_version,
+            "wifi_rssi_dbm": self.coordinator.wifi_rssi_dbm,
+            "topology_device_count": self.coordinator.topology_device_count,
+            "topology_reported_count": self.coordinator.topology_reported_count,
+            "inverter_count": self.coordinator.inverter_count,
+            "master_serial": self.coordinator.master_serial,
+            "executor_serials": self.coordinator.executor_serials,
+            "meter_serial": self.coordinator.meter_serial,
+            "meter_name": self.coordinator.meter_name,
+            "system_topology": self.coordinator.system_topology,
+        }
+
+
+class AeccWifiSignalSensor(
+    CoordinatorEntity[AeccBatteryCoordinator],
+    SensorEntity,
+):
+    """User-friendly Wi-Fi signal strength for the master PS240."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Wi-Fi Signal"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_wifi_signal"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.wifi_rssi_dbm is not None
+
+    @property
+    def native_value(self) -> int | None:
+        rssi = self.coordinator.wifi_rssi_dbm
+        if rssi is None:
+            return None
+        return int(max(0, min(100, round((rssi + 100) * 2))))
+
+    @property
+    def icon(self) -> str:
+        percentage = self.native_value
+        if percentage is None or percentage < 25:
+            return "mdi:wifi-strength-outline"
+        if percentage < 50:
+            return "mdi:wifi-strength-1"
+        if percentage < 75:
+            return "mdi:wifi-strength-2"
+        return "mdi:wifi-strength-4"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rssi = self.coordinator.wifi_rssi_dbm
+        if rssi is None:
+            quality = "Unavailable"
+        elif rssi >= -50:
+            quality = "Excellent"
+        elif rssi >= -60:
+            quality = "Very good"
+        elif rssi >= -67:
+            quality = "Good"
+        elif rssi >= -70:
+            quality = "Fair"
+        elif rssi >= -80:
+            quality = "Weak"
+        else:
+            quality = "Very weak"
+        return {
+            "quality": quality,
+            "signal_dbm": rssi,
+            "device_role": "Master",
+            "note": "Percentage is a user-friendly conversion of the raw Wi-Fi signal.",
+        }
