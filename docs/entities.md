@@ -74,6 +74,12 @@ result.
 - Will Fill Today
 - Recommended Overnight SOC
 
+Estimated House Demand includes the AFERIY PV reading plus any additional live
+solar power entities configured under the Home Assistant Energy Dashboard's
+Solar Panels section. The integration excludes its own AFERIY PV entity to
+prevent double-counting. The sensor attributes list the additional entities and
+wattage included in the calculation.
+
 Battery Capacity is used by energy and overnight charge calculations only. It
 does not control individual Battery N SOC entity creation.
 
@@ -84,7 +90,10 @@ Recommended Overnight SOC is designed for homes with a cheap overnight tariff, f
 The calculation can use:
 
 - The configured usable battery capacity
-- A weighted 14-day household energy-use profile from Home Assistant history
+- A weighted 30-day household energy-use profile from Home Assistant history,
+  prioritising the latest 14 valid occupied days and using older days as lighter
+  holiday-resistant fallback history. Home Assistant Recorder should retain at
+  least 35 days.
 - Solar forecast data, ideally from Solcast
 - The expected Pre-Sunrise Need before solar generation is useful
 - The expected Post-Sunset Need after useful solar falls away and before off-peak starts

@@ -61,7 +61,7 @@
         "data_description": {
           "advanced_energy_sensors": "Voegt optionele inschattingssensoren toe die zonneprognose-, tarief-, bezettings- en huishoudverbruiksdata kunnen gebruiken.",
           "poll_interval": "Hoe vaak de batterij lokaal wordt uitgelezen, in seconden.",
-          "tariff_preset": "Defaults to Octopus Intelligent Go. Named presets store their listed times automatically; choose custom to edit the times manually.",
+          "tariff_preset": "Defaults to Intelligent Octopus Go. Named presets store their listed times automatically; choose custom to edit the times manually.",
           "off_peak_start": "Start of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
           "off_peak_end": "End of your cheap-rate charging window in 24-hour HH:MM format. Used only when the preset is custom.",
           "master_device": "Choose the master/coordinator, or leave as manual and enter the IP below. Executor units should not be selected.",

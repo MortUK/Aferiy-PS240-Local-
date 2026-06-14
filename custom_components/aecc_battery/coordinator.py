@@ -187,6 +187,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
         self.smart_solar_forecast_scale: float = 1.0
         self.smart_house_demand_scale: float = 1.0
+        self.energy_dashboard_manager: Any | None = None
         self.manual_overnight_target_soc: int = 80
         self.overnight_charging_mode: str = overnight_charging_mode
         self.off_peak_start: str = off_peak_start
@@ -203,7 +204,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._smart_history_status: dict[str, Any] = {
             "recorder_history_status": "warming",
             "recorder_history_valid_days": 0,
-            "recorder_history_lookback_days": 14,
+            "recorder_history_lookback_days": 30,
+            "recorder_retention_days": 35,
             "reason": "Usage history is warming up.",
         }
         self._overnight_last_action: str | None = None

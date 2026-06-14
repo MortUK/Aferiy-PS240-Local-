@@ -127,8 +127,11 @@ _SOLAR_AVAILABILITY_ENTITY = "select.aecc_battery_solar_availability"
 _FORECAST_PERIOD = timedelta(minutes=30)
 _RUNTIME_DEMAND_HISTORY_WINDOW = timedelta(hours=3)
 _RUNTIME_DEMAND_MIN_HISTORY = timedelta(minutes=15)
-_RUNTIME_RECORDER_HISTORY_DAYS = 14
-_RUNTIME_RECORDER_REFRESH_INTERVAL = timedelta(minutes=30)
+_RUNTIME_RECORDER_HISTORY_DAYS = 30
+_RUNTIME_RECORDER_RETENTION_DAYS = 35
+_RUNTIME_RECORDER_PRIMARY_OCCUPIED_DAYS = 14
+_RUNTIME_RECORDER_OLDER_DAY_WEIGHT_FACTOR = 0.25
+_RUNTIME_RECORDER_REFRESH_INTERVAL = timedelta(hours=1)
 _RUNTIME_PROFILE_HORIZON = timedelta(hours=24)
 _RUNTIME_PROFILE_INTERVAL = timedelta(minutes=30)
 _RUNTIME_PROFILE_MAX_CYCLES = 14
@@ -239,12 +242,91 @@ def _house_empty_from_state(state: str | None) -> tuple[bool | None, int | None]
     return None, None
 
 
+def _state_power_w(hass: HomeAssistant, entity_id: str) -> float | None:
+    """Return a power entity state converted to watts."""
+    state = hass.states.get(entity_id)
+    if state is None or state.state in ("unknown", "unavailable"):
+        return None
+
+    value = _as_float(state.state)
+    if value is None:
+        return None
+
+    scale = {
+        "mW": 0.001,
+        "W": 1.0,
+        "kW": 1000.0,
+        "MW": 1_000_000.0,
+        "GW": 1_000_000_000.0,
+    }.get(state.attributes.get("unit_of_measurement"))
+    if scale is None:
+        return None
+    return value * scale
+
+
+def _energy_dashboard_additional_solar_w(
+    hass: HomeAssistant,
+    coordinator: AeccBatteryCoordinator,
+) -> tuple[float, dict[str, Any]]:
+    """Sum non-AECC live solar power configured in the Energy Dashboard."""
+    manager = getattr(coordinator, "energy_dashboard_manager", None)
+    preferences = getattr(manager, "data", None)
+    if not preferences:
+        return 0.0, {
+            "status": "energy_dashboard_unavailable",
+            "entities": [],
+            "skipped_entities": [],
+        }
+
+    entity_registry = er.async_get(hass)
+    included: dict[str, float] = {}
+    skipped: list[str] = []
+    excluded_aecc: list[str] = []
+
+    for source in preferences.get("energy_sources", []):
+        if source.get("type") != "solar":
+            continue
+        entity_id = source.get("stat_rate")
+        if not entity_id or entity_id in included:
+            continue
+
+        registry_entry = entity_registry.async_get(entity_id)
+        if (
+            registry_entry is not None
+            and registry_entry.platform == DOMAIN
+            and registry_entry.config_entry_id == coordinator._entry_id
+        ):
+            excluded_aecc.append(entity_id)
+            continue
+
+        power_w = _state_power_w(hass, entity_id)
+        if power_w is None:
+            skipped.append(entity_id)
+            continue
+        included[entity_id] = max(0.0, power_w)
+
+    return sum(included.values()), {
+        "status": "active" if included else "no_additional_live_solar",
+        "entities": [
+            {"entity_id": entity_id, "power_w": round(power_w, 1)}
+            for entity_id, power_w in included.items()
+        ],
+        "skipped_entities": skipped,
+        "excluded_aecc_entities": excluded_aecc,
+    }
+
+
 def _estimate_house_demand_w(
     hass: HomeAssistant,
     coordinator: AeccBatteryCoordinator,
 ) -> tuple[float, dict[str, Any]]:
     """Estimate live house demand from PV, battery, and AECC grid meter flow."""
-    pv_w = _as_float(coordinator.get_value("pv_power"), 0.0) or 0.0
+    aecc_pv_w = _as_float(coordinator.get_value("pv_power"), 0.0) or 0.0
+    additional_pv_w, additional_pv_attrs = _energy_dashboard_additional_solar_w(
+        hass,
+        coordinator,
+    )
+    pv_w = aecc_pv_w + additional_pv_w
     total_charge_w = _as_float(coordinator.get_value("total_charge_power"), 0.0) or 0.0
     battery_charging_w = _as_float(coordinator.get_value("battery_charging_power"), 0.0) or 0.0
     pv_charging_w = _as_float(coordinator.get_value("pv_charging_power"), 0.0) or 0.0
@@ -272,6 +354,9 @@ def _estimate_house_demand_w(
     attrs = {
         "formula": "pv + grid_import + battery_discharge - battery_charge - grid_export",
         "pv_power_w": round(pv_w, 1),
+        "aecc_pv_power_w": round(aecc_pv_w, 1),
+        "additional_solar_power_w": round(additional_pv_w, 1),
+        "energy_dashboard_solar": additional_pv_attrs,
         "grid_meter_power_w": round(grid_w, 1),
         "grid_import_w": round(import_w, 1),
         "grid_export_w": round(export_w, 1),
@@ -293,6 +378,15 @@ async def async_setup_entry(
     hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: AeccBatteryCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+    try:
+        from homeassistant.components.energy import data as energy_data
+
+        coordinator.energy_dashboard_manager = await energy_data.async_get_manager(hass)
+    except (ImportError, RuntimeError, OSError):
+        _LOGGER.debug(
+            "Home Assistant Energy Dashboard preferences are unavailable",
+            exc_info=True,
+        )
     entities: list[SensorEntity] = []
 
     for key, name, canonical_key, unit, icon, is_power in _SENSORS:
@@ -1141,7 +1235,13 @@ class AeccSmartHistorySensor(
 
     @staticmethod
     def _history_percent(attrs: dict[str, Any]) -> int:
-        lookback_days = int(_as_float(attrs.get("recorder_history_lookback_days"), 14) or 14)
+        lookback_days = int(
+            _as_float(
+                attrs.get("recorder_history_lookback_days"),
+                _RUNTIME_RECORDER_HISTORY_DAYS,
+            )
+            or _RUNTIME_RECORDER_HISTORY_DAYS
+        )
         valid_days = int(_as_float(attrs.get("recorder_history_valid_days"), 0) or 0)
         rejected_days = int(_as_float(attrs.get("recorder_history_rejected_days"), 0) or 0)
         skipped_away_days = attrs.get("recorder_history_skipped_away_days", [])
@@ -1156,7 +1256,13 @@ class AeccSmartHistorySensor(
     def _history_attrs(attrs: dict[str, Any], percent: int) -> dict[str, Any]:
         status = str(attrs.get("recorder_history_status", "warming"))
         valid_days = int(_as_float(attrs.get("recorder_history_valid_days"), 0) or 0)
-        lookback_days = int(_as_float(attrs.get("recorder_history_lookback_days"), 14) or 14)
+        lookback_days = int(
+            _as_float(
+                attrs.get("recorder_history_lookback_days"),
+                _RUNTIME_RECORDER_HISTORY_DAYS,
+            )
+            or _RUNTIME_RECORDER_HISTORY_DAYS
+        )
         accepted_days = attrs.get("recorder_history_daily_averages", [])
         rejected_days = attrs.get("recorder_history_rejected_daily_averages", [])
         skipped_away_days = attrs.get("recorder_history_skipped_away_days", [])
@@ -1199,11 +1305,14 @@ class AeccSmartHistorySensor(
             "profile_buckets": attrs.get("recorder_history_profile_buckets"),
             "history_demand_w": attrs.get("recorder_history_demand_w"),
             "history_energy_kwh": attrs.get("recorder_history_energy_kwh"),
+            "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
             "reason": attrs.get("recorder_history_reason"),
-            "basis": "observed_days_in_14_day_recorder_history",
+            "basis": "observed_days_in_30_day_recorder_history",
             "note": (
-                "Away and filtered days count as observed history but are not used in the demand average. "
-                "Missing source data reduces completeness as it moves through the 14-day window."
+                "The latest 14 accepted occupied days receive the strongest weighting; older days provide "
+                "lighter fallback coverage. Away and filtered days count as observed history but are not "
+                "used in the demand average. Missing source data reduces completeness as it moves through "
+                "the 30-day window."
             ),
         }
 
@@ -1947,6 +2056,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
         self._recorder_history_attrs: dict[str, Any] = {
             "recorder_history_status": "warming",
             "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
+            "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
             "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
         }
         self._last_recorder_refresh: datetime | None = None
@@ -2133,7 +2243,10 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
             local_now = now.astimezone()
             self._recorder_profile_start = now
 
-            for days_ago in range(2, _RUNTIME_RECORDER_HISTORY_DAYS + 2):
+            # Each window is a complete rolling 24-hour period ending at the
+            # current time of day. Start with the immediately preceding period
+            # so SMART History gains one complete day per day retained.
+            for days_ago in range(1, _RUNTIME_RECORDER_HISTORY_DAYS + 1):
                 window_start_local = local_now - timedelta(days=days_ago)
                 window_end_local = window_start_local + _RUNTIME_PROFILE_HORIZON
                 start = window_start_local.astimezone(UTC)
@@ -2197,11 +2310,6 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     continue
 
                 average_w = watt_seconds / duration_seconds
-                history_weight, history_weight_reasons = self._history_day_weight(
-                    days_ago,
-                    window_start_local,
-                    local_now,
-                )
                 daily_results.append(
                     {
                         "days_ago": days_ago,
@@ -2212,14 +2320,13 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                         "energy_kwh": round(watt_seconds / 3_600_000, 3),
                         "source": history_source,
                         "source_entity": history_entity_id,
-                        "history_weight": history_weight,
-                        "history_weight_reasons": history_weight_reasons,
                     }
                 )
 
             refreshed_at = datetime.now(UTC)
             self._last_recorder_refresh = refreshed_at
             daily_averages, rejected_daily_averages = self._filter_runtime_history_days(daily_results)
+            self._apply_history_day_weights(daily_averages, local_now)
             profile_totals: dict[int, dict[str, float]] = {}
             total_duration_seconds = 0.0
             total_watt_seconds = 0.0
@@ -2245,6 +2352,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_source_entity": entity_id,
                     "recorder_history_source_entities": entity_ids,
                     "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
+                    "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
                     "recorder_history_valid_days": 0,
                     "recorder_history_rejected_days": len(rejected_daily_averages),
@@ -2267,11 +2375,20 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_source_entity": entity_id,
                     "recorder_history_source_entities": entity_ids,
                     "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
+                    "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
                     "recorder_history_interval_minutes": round(_RUNTIME_PROFILE_INTERVAL.total_seconds() / 60, 1),
                     "recorder_history_valid_days": len(daily_averages),
-                    "recorder_history_weighting": "recency_decay_with_same_weekday_boost",
-                    "recorder_history_excludes_current_day": True,
+                    "recorder_history_weighting": (
+                        "latest_14_occupied_days_prioritised_with_older_30_day_fallback"
+                    ),
+                    "recorder_history_uses_complete_rolling_days": True,
+                    "recorder_history_primary_occupied_days": (
+                        _RUNTIME_RECORDER_PRIMARY_OCCUPIED_DAYS
+                    ),
+                    "recorder_history_older_day_weight_factor": (
+                        _RUNTIME_RECORDER_OLDER_DAY_WEIGHT_FACTOR
+                    ),
                     "recorder_history_recency_decay": _RUNTIME_RECORDER_RECENCY_DECAY,
                     "recorder_history_min_day_weight": _RUNTIME_RECORDER_MIN_DAY_WEIGHT,
                     "recorder_history_same_weekday_boost": _RUNTIME_RECORDER_SAME_WEEKDAY_BOOST,
@@ -2296,6 +2413,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_source_entity": entity_id,
                     "recorder_history_source_entities": entity_ids,
                     "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
+                    "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
                     "recorder_history_skipped_away_days": [],
                     "recorder_history_reason": str(exc),
@@ -2311,17 +2429,47 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                 pass
 
     @staticmethod
+    def _apply_history_day_weights(
+        daily_results: list[dict[str, Any]],
+        target_local: datetime,
+    ) -> None:
+        """Weight accepted occupied days by recency rank rather than calendar gaps."""
+        ordered_days = sorted(
+            daily_results,
+            key=lambda day: int(day.get("days_ago", 9999)),
+        )
+        for occupied_rank, day in enumerate(ordered_days, start=1):
+            days_ago = int(day.get("days_ago", occupied_rank))
+            window_start_local = target_local - timedelta(days=days_ago)
+            weight, reasons = AeccRuntimeAtCurrentHouseDemandSensor._history_day_weight(
+                occupied_rank,
+                window_start_local,
+                target_local,
+            )
+            day["history_weight"] = weight
+            day["history_weight_reasons"] = reasons
+            day["occupied_history_rank"] = occupied_rank
+
+    @staticmethod
     def _history_day_weight(
-        days_ago: int,
+        occupied_rank: int,
         window_start_local: datetime,
         target_local: datetime,
     ) -> tuple[float, list[str]]:
-        days_back = max(0, days_ago - 1)
+        days_back = max(0, occupied_rank - 1)
         weight = max(
             _RUNTIME_RECORDER_MIN_DAY_WEIGHT,
             _RUNTIME_RECORDER_RECENCY_DECAY**days_back,
         )
-        reasons = ["recency_weighted"]
+        reasons = [
+            "occupied_day_recency_weighted",
+            f"occupied_history_rank_{occupied_rank}",
+        ]
+        if occupied_rank <= _RUNTIME_RECORDER_PRIMARY_OCCUPIED_DAYS:
+            reasons.append("primary_recent_occupied_history")
+        else:
+            weight *= _RUNTIME_RECORDER_OLDER_DAY_WEIGHT_FACTOR
+            reasons.append("older_history_fallback")
         if window_start_local.weekday() == target_local.weekday():
             weight *= _RUNTIME_RECORDER_SAME_WEEKDAY_BOOST
             reasons.append("same_weekday_boost")
@@ -2390,6 +2538,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                 "source_entity": day.get("source_entity"),
                 "history_weight": day.get("history_weight"),
                 "history_weight_reasons": day.get("history_weight_reasons"),
+                "occupied_history_rank": day.get("occupied_history_rank"),
             }
             for day in daily_results
         ]

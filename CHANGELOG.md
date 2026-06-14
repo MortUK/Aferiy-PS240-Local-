@@ -4,6 +4,17 @@
 
 No unreleased changes.
 
+## 1.7.2
+
+- Added automatic support for additional solar inverters configured in the
+  Home Assistant Energy Dashboard. Their live solar power is included in House
+  Demand and SMART overnight history without double-counting AFERIY PV.
+- Extended SMART History from 14 to 30 days, prioritising the latest 14 accepted occupied days while retaining older days as lighter holiday-resistant fallback history.
+- Added visible 35-day Recorder-retention guidance and updated the local Home Assistant configuration to preserve the complete 30-day profile.
+- Reduced SMART Recorder-history refresh frequency to hourly to offset the larger history window.
+- Fixed SMART History completeness lagging by one day by including the latest complete rolling 24-hour history period.
+- Updated the off-peak tariff presets with revised UK tariff windows and added EDF GoElectric 35, EDF E7 Fixed, OVO Simpler Energy E7, Octopus E7, and E.ON Next Pumped Fixed.
+
 ## 1.7.1
 
 - Added a user-friendly Wi-Fi Signal sensor showing percentage, quality and raw dBm.

@@ -43,20 +43,30 @@ OVERNIGHT_CHARGE_MODE_FROM_LABEL: dict[str, str] = {
 OVERNIGHT_CHARGE_MODE_FROM_LABEL["Disabled"] = OVERNIGHT_CHARGE_MODE_DISABLED
 TARIFF_PRESETS: dict[str, tuple[str, str]] = {
     "snug_octopus": ("00:30", "06:30"),
-    "octopus_go": ("00:30", "05:30"),
     "octopus_intelligent_go": (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
-    "eon_next_drive": ("00:00", "07:00"),
+    "octopus_go": ("23:30", "05:30"),
+    "edf_goelectric_35": ("23:00", "06:00"),
     "british_gas_electric_driver": ("00:00", "05:00"),
-    "british_gas_economy_7": ("00:00", "05:00"),
+    "eon_next_drive": ("00:00", "06:00"),
+    "british_gas_economy_7": ("00:30", "07:30"),
+    "edf_e7_fixed": ("00:30", "07:30"),
+    "ovo_simpler_energy_e7": ("00:30", "07:30"),
+    "octopus_e7": ("00:30", "07:30"),
+    "eon_next_pumped_fixed": ("22:00", "06:00"),
     "custom": (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
 }
 TARIFF_PRESET_LABELS: dict[str, str] = {
     "snug_octopus": "Snug Octopus (00:30-06:30)",
-    "octopus_go": "Octopus Go (00:30-05:30)",
-    "octopus_intelligent_go": "Octopus Intelligent Go (23:30-05:30)",
-    "eon_next_drive": "E.ON Next Drive (00:00-07:00)",
-    "british_gas_electric_driver": "British Gas Electric Driver (00:00-05:00)",
-    "british_gas_economy_7": "British Gas Economy 7 (00:00-05:00)",
+    "octopus_intelligent_go": "Intelligent Octopus Go (23:30-05:30)",
+    "octopus_go": "Octopus Go (23:30-05:30)",
+    "edf_goelectric_35": "EDF GoElectric 35 (23:00-06:00)",
+    "british_gas_electric_driver": "British Gas EV Power+ (00:00-05:00)",
+    "eon_next_drive": "E.ON Next Drive (00:00-06:00)",
+    "british_gas_economy_7": "British Gas Standard E7 (00:30-07:30)",
+    "edf_e7_fixed": "EDF E7 Fixed (00:30-07:30)",
+    "ovo_simpler_energy_e7": "OVO Simpler Energy E7 (00:30-07:30)",
+    "octopus_e7": "Octopus E7 (00:30-07:30)",
+    "eon_next_pumped_fixed": "E.ON Next Pumped Fixed (22:00-06:00)",
     "custom": "Custom/manual times",
 }
 

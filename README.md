@@ -3,7 +3,7 @@
 ![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.jpeg)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.7.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.7.2-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-RichardOwen-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/richardowen)
@@ -81,7 +81,14 @@ The advanced estimate sensors are disabled by default because they can depend on
 
 Battery Capacity is an advanced estimate input selected in 1.958 kWh module steps. It is used by the charge and overnight energy calculations only. It does not limit the Battery N SOC sensors reported by the master.
 
-The off-peak window defaults to Octopus Intelligent Go, 23:30 to 05:30. Named presets are available for Snug Octopus, Octopus Go, Octopus Intelligent Go, E.ON Next Drive, British Gas Electric Driver, and British Gas Economy 7. If your tariff uses different cheap-rate hours, choose Custom and set the start and end times manually in 24-hour `HH:MM` format. These times are used by the overnight target and Pre-Sunrise Need calculations.
+The off-peak window defaults to Intelligent Octopus Go, 23:30 to 05:30.
+Named presets are available for Snug Octopus, Intelligent Octopus Go,
+Octopus Go, EDF GoElectric 35, British Gas EV Power+, E.ON Next Drive,
+British Gas Standard E7, EDF E7 Fixed, OVO Simpler Energy E7, Octopus E7,
+and E.ON Next Pumped Fixed. If your tariff uses different cheap-rate hours,
+choose Custom and set the start and end times manually in 24-hour `HH:MM`
+format. These times are used by the overnight target and Pre-Sunrise Need
+calculations.
 
 The external helper checkboxes are reminders for installers. They do not install or validate integrations. Smart estimates look for standard Solcast forecast files and sensors and use `zone.home` for home occupancy. Battery control and the overnight target use the configured tariff window and AECC grid reading; Shelly comparison remains diagnostic only.
 
@@ -113,8 +120,11 @@ Recommended Overnight SOC is calculated from:
 
 - **Battery capacity** and the configured minimum discharge SOC, so unusable
   reserve is not counted as available energy.
-- **House demand history**, using a weighted 14-day time-of-day profile from
-  Home Assistant recorder.
+- **House demand history**, using a weighted 30-day time-of-day profile from
+  Home Assistant Recorder. The latest 14 valid occupied days receive the
+  strongest weighting, while older days provide lighter fallback coverage so a
+  two-week holiday does not make the house appear permanently empty. Retain at
+  least 35 days in Recorder so the complete 30-day profile remains available.
 - **Normal occupied-house use**, with `zone.home` used to avoid treating
   empty-house days as normal demand.
 - **Tomorrow's Solcast forecast**, preferably the timed forecast file rather
@@ -136,6 +146,14 @@ Two optional SMART tuning sliders are available under Configuration:
   if your real system consistently produces more or less than Solcast expects.
 - **SMART House Demand** lets you gently scale the house demand estimate up or
   down if the recommendation is consistently too cautious or too light.
+
+House Demand automatically includes additional live solar-power sources added
+to Home Assistant's **Energy Dashboard**. This is useful when the AFERIY system
+shares the property with another inverter, such as Hoymiles. Add that inverter's
+solar energy and live power entities under **Settings > Dashboards > Energy >
+Solar Panels**. The integration excludes its own AFERIY PV entity, adds the
+other configured solar power to the demand calculation, and requires no extra
+AECC setting.
 
 Leave both at 100% to use the normal calculation. On low-solar or close-call
 days, the planner may deliberately charge more overnight so cheap-rate energy is

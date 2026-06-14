@@ -50,17 +50,29 @@ CAPACITY_PRESET_OPTIONS = [
 OVERNIGHT_CHARGE_MODE_OPTIONS = list(OVERNIGHT_CHARGE_MODE_LABELS.values())
 TARIFF_PRESET_SHORT_LABELS = {
     "snug_octopus": "Snug Octopus",
+    "octopus_intelligent_go": "Intelligent Octopus Go",
     "octopus_go": "Octopus Go",
-    "octopus_intelligent_go": "Octopus Intelligent Go",
+    "edf_goelectric_35": "EDF GoElectric 35",
+    "british_gas_electric_driver": "British Gas EV Power+",
     "eon_next_drive": "E.ON Next Drive",
-    "british_gas_electric_driver": "British Gas Electric Driver",
-    "british_gas_economy_7": "British Gas Economy 7",
+    "british_gas_economy_7": "British Gas Standard E7",
+    "edf_e7_fixed": "EDF E7 Fixed",
+    "ovo_simpler_energy_e7": "OVO Simpler Energy E7",
+    "octopus_e7": "Octopus E7",
+    "eon_next_pumped_fixed": "E.ON Next Pumped Fixed",
     "custom": "Custom",
 }
 TARIFF_PRESET_OPTIONS = [TARIFF_PRESET_SHORT_LABELS[value] for value in TARIFF_PRESETS]
 TARIFF_PRESET_FROM_LABEL = {
     label: value for value, label in TARIFF_PRESET_SHORT_LABELS.items()
 }
+TARIFF_PRESET_FROM_LABEL.update(
+    {
+        "Octopus Intelligent Go": "octopus_intelligent_go",
+        "British Gas Electric Driver": "british_gas_electric_driver",
+        "British Gas Economy 7": "british_gas_economy_7",
+    }
+)
 SOLAR_AVAILABLE = "Solar Available"
 SOLAR_UNAVAILABLE = "Solar Unavailable"
 SOLAR_AVAILABILITY_OPTIONS = [SOLAR_AVAILABLE, SOLAR_UNAVAILABLE]
