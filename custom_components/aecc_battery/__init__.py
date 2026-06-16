@@ -397,6 +397,8 @@ def _async_remove_withdrawn_config_entities(hass: HomeAssistant, entry: ConfigEn
     registry = er.async_get(hass)
     withdrawn_entities = (
         (Platform.NUMBER, f"{entry.entry_id}_battery_capacity"),
+        (Platform.NUMBER, f"{entry.entry_id}_smart_solar_forecast_scale"),
+        (Platform.NUMBER, f"{entry.entry_id}_smart_house_demand_scale"),
         (Platform.SENSOR, f"{entry.entry_id}_battery_soc"),
         (Platform.SENSOR, f"{entry.entry_id}_local_unit_battery_soc"),
         (Platform.SENSOR, f"{entry.entry_id}_runtime_at_current_house_demand"),

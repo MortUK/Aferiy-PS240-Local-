@@ -137,28 +137,31 @@ Recommended Overnight SOC is calculated from:
   reach the next cheap-rate window.
 - **AFERIY AC charging**, which is subtracted from demand history so overnight
   grid charging is not counted as normal house use.
-- **A small buffer and confidence adjustment**, so stale forecast data or weak
-  demand history makes the target safer rather than optimistic.
+- **A user-set overnight buffer**, defaulting to 3%, for expected extra demand
+  such as air conditioning or unusual morning use.
+- **Automatic safeguards on top of that buffer**, retaining the existing
+  protection for weak demand history, missing timed forecast detail,
+  time-of-day demand fallback, low solar and close-call forecast days.
 
-Two optional SMART tuning sliders are available under Configuration:
-
-- **SMART Solar Forecast** lets you gently scale the Solcast forecast up or down
-  if your real system consistently produces more or less than Solcast expects.
-- **SMART House Demand** lets you gently scale the house demand estimate up or
-  down if the recommendation is consistently too cautious or too light.
+The **Overnight Buffer** slider is available under Configuration from 0% to
+20%. It sets the normal baseline only; the integration may add its automatic
+safeguards when the available data or forecast calls for more caution. The
+recommended SOC attributes and bundled card show both the selected baseline and
+the added safeguard amount.
 
 House Demand automatically includes additional live solar-power sources added
 to Home Assistant's **Energy Dashboard**. This is useful when the AFERIY system
 shares the property with another inverter, such as Hoymiles. Add that inverter's
-solar energy and live power entities under **Settings > Dashboards > Energy >
-Solar Panels**. The integration excludes its own AFERIY PV entity, adds the
-other configured solar power to the demand calculation, and requires no extra
-AECC setting.
+solar power and cumulative solar energy entities to the Energy Dashboard. Live
+power keeps House Demand responsive, while the cumulative energy total
+automatically corrects slower inverter polling before it becomes SMART history.
+Configure both under **Settings > Dashboards > Energy > Solar Panels**. The
+integration excludes its own AFERIY PV entity, adds the other configured solar
+power to the demand calculation, and requires no extra AECC setting.
 
-Leave both at 100% to use the normal calculation. On low-solar or close-call
-days, the planner may deliberately charge more overnight so cheap-rate energy is
-carried forward, while still leaving enough battery space for the solar that is
-forecast to arrive.
+On low-solar or close-call days, the planner may deliberately charge more
+overnight so cheap-rate energy is carried forward, while still leaving enough
+battery space for the solar that is forecast to arrive.
 
 The integration also includes a **Solar Availability** dropdown. Set it to Solar
 Unavailable when panels are covered, disconnected, or otherwise unable to

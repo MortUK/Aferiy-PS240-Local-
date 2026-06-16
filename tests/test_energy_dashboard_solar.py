@@ -28,3 +28,22 @@ def test_energy_dashboard_power_units_are_converted_to_watts() -> None:
 
     assert '"kW": 1000.0' in source
     assert '"MW": 1_000_000.0' in source
+
+
+def test_house_demand_energy_reconciles_cumulative_external_solar() -> None:
+    source = SENSOR.read_text()
+
+    assert 'source.get("stat_energy")' in source
+    assert "_state_energy_kwh(" in source
+    assert "_external_solar_reconciliation(" in source
+    assert "actual_delta_kwh - sampled_delta_kwh" in source
+    assert "additional_solar_energy_reconciliation" in source
+    assert "_demand_profile_from_energy_history(" in source
+    assert 'history_source = "house_demand_energy"' in source
+
+
+def test_external_solar_energy_counter_resets_are_guarded() -> None:
+    source = SENSOR.read_text()
+
+    assert 'status": "counter_reset"' in source
+    assert "pending_correction_kwh" in source

@@ -185,8 +185,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.commanded_discharge_power: int = 800
         self.commanded_feed_power: int = 0
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
-        self.smart_solar_forecast_scale: float = 1.0
-        self.smart_house_demand_scale: float = 1.0
+        self.smart_overnight_buffer_soc: float = 3.0
         self.energy_dashboard_manager: Any | None = None
         self.manual_overnight_target_soc: int = 80
         self.overnight_charging_mode: str = overnight_charging_mode
@@ -341,13 +340,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if capacity is not None and capacity > 0:
             self.battery_capacity_kwh = capacity
 
-        solar_scale = self._safe_float(data.get("smart_solar_forecast_scale"))
-        if solar_scale is not None:
-            self.smart_solar_forecast_scale = max(0.5, min(1.5, solar_scale))
-
-        demand_scale = self._safe_float(data.get("smart_house_demand_scale"))
-        if demand_scale is not None:
-            self.smart_house_demand_scale = max(0.5, min(1.5, demand_scale))
+        overnight_buffer = self._safe_float(data.get("smart_overnight_buffer_soc"))
+        if overnight_buffer is not None:
+            self.smart_overnight_buffer_soc = max(0.0, min(20.0, overnight_buffer))
 
         manual_target = self._safe_int(data.get("manual_overnight_target_soc"))
         if manual_target is not None:
@@ -393,8 +388,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         data = {
             "battery_capacity_kwh": round(float(self.battery_capacity_kwh), 3),
-            "smart_solar_forecast_scale": round(float(self.smart_solar_forecast_scale), 3),
-            "smart_house_demand_scale": round(float(self.smart_house_demand_scale), 3),
+            "smart_overnight_buffer_soc": round(float(self.smart_overnight_buffer_soc), 1),
             "manual_overnight_target_soc": int(self.manual_overnight_target_soc),
             "overnight_charging_mode": self.overnight_charging_mode,
             "smart_tariff_preset": self.smart_tariff_preset,

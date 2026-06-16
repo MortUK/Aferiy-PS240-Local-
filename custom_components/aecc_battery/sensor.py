@@ -149,10 +149,8 @@ _TOTAL_CHARGE_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_total_charge_power"
 _BATTERY_DISCHARGING_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_battery_discharging_power"
 _TOTAL_BATTERY_OUTPUT_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_total_battery_output_power"
 _FULL_SOC = 100.0
-_OVERNIGHT_OCCUPIED_BASE_BUFFER_SOC = 3.0
-_OVERNIGHT_EMPTY_HOUSE_BASE_BUFFER_SOC = 2.0
-_OVERNIGHT_MAX_BUFFER_SOC = 7.0
-_OVERNIGHT_EMPTY_HOUSE_MAX_BUFFER_SOC = 4.0
+_OVERNIGHT_DEFAULT_BUFFER_SOC = 3.0
+_OVERNIGHT_MAX_BUFFER_SOC = 20.0
 _OVERNIGHT_LOW_SOLAR_KWH = 4.0
 _OVERNIGHT_DISCHARGE_EFFICIENCY = 1.0
 _OVERNIGHT_GRID_CHARGE_EFFICIENCY = 0.90
@@ -167,15 +165,15 @@ _OVERNIGHT_USEFUL_SOLAR_MARGIN_W = 75.0
 _OVERNIGHT_USEFUL_SOLAR_DEMAND_FACTOR = 1.1
 _OVERNIGHT_MORNING_SUPPORT_SOLAR_MIN_W = 100.0
 _OVERNIGHT_MORNING_SUPPORT_DEMAND_FACTOR = 0.20
-_OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR = 0.70
-_OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.80
-_OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.95
+_OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR = 0.65
+_OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.75
+_OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.90
 _OVERNIGHT_BALANCED_SOLAR_RATIO = 1.0
 _OVERNIGHT_STRONG_SOLAR_RATIO = 1.2
 _OVERNIGHT_CLOSE_CALL_SOLAR_RATIO = 1.15
 _OVERNIGHT_SOLAR_CAPABLE_RATIO = 0.75
 _OVERNIGHT_SOLAR_CAPABLE_MIN_KWH = 6.0
-_OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR = 0.7
+_OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR = 0.65
 _OCCUPIED_DAILY_DEMAND_FLOOR_KWH = 9.0
 _EMPTY_HOUSE_DAILY_DEMAND_FLOOR_KWH = 3.0
 
@@ -264,6 +262,27 @@ def _state_power_w(hass: HomeAssistant, entity_id: str) -> float | None:
     return value * scale
 
 
+def _state_energy_kwh(hass: HomeAssistant, entity_id: str) -> float | None:
+    """Return an energy entity state converted to kWh."""
+    state = hass.states.get(entity_id)
+    if state is None or state.state in ("unknown", "unavailable"):
+        return None
+
+    value = _as_float(state.state)
+    if value is None:
+        return None
+
+    scale = {
+        "Wh": 0.001,
+        "kWh": 1.0,
+        "MWh": 1000.0,
+        "GWh": 1_000_000.0,
+    }.get(state.attributes.get("unit_of_measurement"))
+    if scale is None:
+        return None
+    return value * scale
+
+
 def _energy_dashboard_additional_solar_w(
     hass: HomeAssistant,
     coordinator: AeccBatteryCoordinator,
@@ -313,6 +332,69 @@ def _energy_dashboard_additional_solar_w(
         ],
         "skipped_entities": skipped,
         "excluded_aecc_entities": excluded_aecc,
+    }
+
+
+def _energy_dashboard_additional_solar_energy_kwh(
+    hass: HomeAssistant,
+    coordinator: AeccBatteryCoordinator,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Read cumulative energy for non-AECC Energy Dashboard solar sources."""
+    manager = getattr(coordinator, "energy_dashboard_manager", None)
+    preferences = getattr(manager, "data", None)
+    if not preferences:
+        return {}, {
+            "status": "energy_dashboard_unavailable",
+            "entities": [],
+            "skipped_entities": [],
+        }
+
+    entity_registry = er.async_get(hass)
+    included: dict[str, dict[str, Any]] = {}
+    skipped: list[str] = []
+    excluded_aecc: list[str] = []
+    configured: list[str] = []
+
+    for source in preferences.get("energy_sources", []):
+        if source.get("type") != "solar":
+            continue
+        energy_entity_id = source.get("stat_energy")
+        power_entity_id = source.get("stat_rate")
+        if not energy_entity_id or energy_entity_id in included:
+            continue
+        configured.append(energy_entity_id)
+
+        registry_entry = entity_registry.async_get(energy_entity_id)
+        if (
+            registry_entry is not None
+            and registry_entry.platform == DOMAIN
+            and registry_entry.config_entry_id == coordinator._entry_id
+        ):
+            excluded_aecc.append(energy_entity_id)
+            continue
+
+        energy_kwh = _state_energy_kwh(hass, energy_entity_id)
+        if energy_kwh is None:
+            skipped.append(energy_entity_id)
+            continue
+        included[energy_entity_id] = {
+            "energy_kwh": max(0.0, energy_kwh),
+            "power_entity_id": power_entity_id,
+        }
+
+    return included, {
+        "status": "active" if included else "no_additional_energy_totals",
+        "entities": [
+            {
+                "entity_id": entity_id,
+                "energy_kwh": round(values["energy_kwh"], 3),
+                "power_entity_id": values["power_entity_id"],
+            }
+            for entity_id, values in included.items()
+        ],
+        "skipped_entities": skipped,
+        "excluded_aecc_entities": excluded_aecc,
+        "configured_entities": configured,
     }
 
 
@@ -927,6 +1009,8 @@ class AeccHouseDemandEnergyBase(
         self._last_update_time: datetime | None = None
         self._last_house_demand_w: float | None = None
         self._last_attributes: dict[str, Any] = {}
+        self._external_solar_trackers: dict[str, dict[str, Any]] = {}
+        self._external_solar_pending_correction_kwh = 0.0
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -959,19 +1043,130 @@ class AeccHouseDemandEnergyBase(
         house_demand_w, attrs = _estimate_house_demand_w(self.hass, self.coordinator)
         self._reset_if_needed(now)
 
+        interval_kwh = 0.0
+        reconciliation_attrs: dict[str, Any] = {
+            "status": "waiting_for_interval",
+            "correction_kwh": 0.0,
+        }
         if self._last_update_time is not None:
             delta_seconds = (now - self._last_update_time).total_seconds()
             if 0 < delta_seconds <= _MAX_GAP_SECONDS:
-                self._accumulated_kwh += max(0.0, house_demand_w) * delta_seconds / 3_600_000
+                interval_kwh = max(0.0, house_demand_w) * delta_seconds / 3_600_000
+                correction_kwh, reconciliation_attrs = self._external_solar_reconciliation(
+                    delta_seconds,
+                    attrs,
+                )
+                self._external_solar_pending_correction_kwh += correction_kwh
+                applied_correction_kwh = max(
+                    -interval_kwh,
+                    self._external_solar_pending_correction_kwh,
+                )
+                interval_kwh += applied_correction_kwh
+                self._external_solar_pending_correction_kwh -= applied_correction_kwh
+                reconciliation_attrs.update(
+                    {
+                        "applied_correction_kwh": round(applied_correction_kwh, 6),
+                        "pending_correction_kwh": round(
+                            self._external_solar_pending_correction_kwh,
+                            6,
+                        ),
+                    }
+                )
+                self._accumulated_kwh += interval_kwh
 
         self._last_update_time = now
         self._last_house_demand_w = house_demand_w
         self._last_attributes = {
             "source": "estimated_house_demand",
             "last_house_demand_w": round(house_demand_w, 1),
+            "last_interval_energy_kwh": round(interval_kwh, 6),
             "house_demand": attrs,
+            "additional_solar_energy_reconciliation": reconciliation_attrs,
         }
         self.async_write_ha_state()
+
+    def _external_solar_reconciliation(
+        self,
+        delta_seconds: float,
+        house_demand_attrs: dict[str, Any],
+    ) -> tuple[float, dict[str, Any]]:
+        """Reconcile sampled solar power against cumulative source energy."""
+        sources, source_attrs = _energy_dashboard_additional_solar_energy_kwh(
+            self.hass,
+            self.coordinator,
+        )
+        live_entities = {
+            item.get("entity_id"): max(0.0, float(item.get("power_w", 0.0)))
+            for item in house_demand_attrs.get("energy_dashboard_solar", {}).get("entities", [])
+            if item.get("entity_id")
+        }
+        corrections: list[dict[str, Any]] = []
+        total_correction_kwh = 0.0
+
+        for energy_entity_id, values in sources.items():
+            current_energy_kwh = float(values["energy_kwh"])
+            power_entity_id = values.get("power_entity_id")
+            tracker = self._external_solar_trackers.get(energy_entity_id)
+            if tracker is None:
+                self._external_solar_trackers[energy_entity_id] = {
+                    "last_energy_kwh": current_energy_kwh,
+                    "live_since_checkpoint_kwh": 0.0,
+                    "power_entity_id": power_entity_id,
+                }
+                corrections.append(
+                    {
+                        "entity_id": energy_entity_id,
+                        "status": "baseline_established",
+                    }
+                )
+                continue
+
+            live_power_w = live_entities.get(power_entity_id, 0.0)
+            tracker["live_since_checkpoint_kwh"] += (
+                live_power_w * delta_seconds / 3_600_000
+            )
+            previous_energy_kwh = float(tracker["last_energy_kwh"])
+            actual_delta_kwh = current_energy_kwh - previous_energy_kwh
+            tracker["power_entity_id"] = power_entity_id
+
+            if actual_delta_kwh < 0:
+                tracker["last_energy_kwh"] = current_energy_kwh
+                tracker["live_since_checkpoint_kwh"] = 0.0
+                corrections.append(
+                    {
+                        "entity_id": energy_entity_id,
+                        "status": "counter_reset",
+                    }
+                )
+                continue
+
+            if actual_delta_kwh == 0:
+                continue
+
+            sampled_delta_kwh = float(tracker["live_since_checkpoint_kwh"])
+            correction_kwh = actual_delta_kwh - sampled_delta_kwh
+            total_correction_kwh += correction_kwh
+            tracker["last_energy_kwh"] = current_energy_kwh
+            tracker["live_since_checkpoint_kwh"] = 0.0
+            corrections.append(
+                {
+                    "entity_id": energy_entity_id,
+                    "status": "reconciled",
+                    "actual_delta_kwh": round(actual_delta_kwh, 6),
+                    "sampled_delta_kwh": round(sampled_delta_kwh, 6),
+                    "correction_kwh": round(correction_kwh, 6),
+                }
+            )
+
+        active_source_ids = set(source_attrs.get("configured_entities", []))
+        for stale_entity_id in set(self._external_solar_trackers) - active_source_ids:
+            del self._external_solar_trackers[stale_entity_id]
+
+        return total_correction_kwh, {
+            **source_attrs,
+            "correction_kwh": round(total_correction_kwh, 6),
+            "source_results": corrections,
+        }
 
     def _reset_if_needed(self, now: datetime) -> None:
         """Optional reset hook for subclasses."""
@@ -2232,6 +2427,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
 
     async def _async_refresh_recorder_history(self, now: datetime) -> None:
         entity_ids = self._estimated_house_demand_entity_ids()
+        energy_entity_ids = self._house_demand_energy_entity_ids()
         entity_id = entity_ids[0]
         try:
             from homeassistant.components.recorder import get_instance
@@ -2269,9 +2465,9 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     continue
 
                 result = None
-                history_source = "estimated_house_demand"
-                history_entity_id = entity_id
-                for candidate_entity_id in entity_ids:
+                history_source = "house_demand_energy"
+                history_entity_id = energy_entity_ids[0]
+                for candidate_entity_id in energy_entity_ids:
                     history = await recorder.async_add_executor_job(
                         state_changes_during_period,
                         self.hass,
@@ -2283,7 +2479,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                         None,
                         True,
                     )
-                    candidate_result = self._demand_profile_from_history(
+                    candidate_result = self._demand_profile_from_energy_history(
                         history.get(candidate_entity_id, []),
                         start,
                         end,
@@ -2293,11 +2489,41 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     result = candidate_result
                     history_entity_id = candidate_entity_id
                     history_source = (
-                        "estimated_house_demand"
-                        if candidate_entity_id == entity_id
-                        else "legacy_estimated_house_demand"
+                        "house_demand_energy"
+                        if candidate_entity_id == energy_entity_ids[0]
+                        else "legacy_house_demand_energy"
                     )
                     break
+                if result is None:
+                    history_source = "estimated_house_demand"
+                    history_entity_id = entity_id
+                    for candidate_entity_id in entity_ids:
+                        history = await recorder.async_add_executor_job(
+                            state_changes_during_period,
+                            self.hass,
+                            start,
+                            end,
+                            candidate_entity_id,
+                            True,
+                            False,
+                            None,
+                            True,
+                        )
+                        candidate_result = self._demand_profile_from_history(
+                            history.get(candidate_entity_id, []),
+                            start,
+                            end,
+                        )
+                        if candidate_result is None:
+                            continue
+                        result = candidate_result
+                        history_entity_id = candidate_entity_id
+                        history_source = (
+                            "estimated_house_demand"
+                            if candidate_entity_id == entity_id
+                            else "legacy_estimated_house_demand"
+                        )
+                        break
                 if result is None:
                     result = await self._async_raw_power_flow_history(recorder, state_changes_during_period, start, end)
                     history_source = "raw_power_flow"
@@ -2351,6 +2577,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_status": "warming",
                     "recorder_history_source_entity": entity_id,
                     "recorder_history_source_entities": entity_ids,
+                    "recorder_history_energy_source_entities": energy_entity_ids,
                     "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
                     "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
@@ -2374,6 +2601,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_status": "ready",
                     "recorder_history_source_entity": entity_id,
                     "recorder_history_source_entities": entity_ids,
+                    "recorder_history_energy_source_entities": energy_entity_ids,
                     "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
                     "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
@@ -2412,6 +2640,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_status": "unavailable",
                     "recorder_history_source_entity": entity_id,
                     "recorder_history_source_entities": entity_ids,
+                    "recorder_history_energy_source_entities": energy_entity_ids,
                     "recorder_history_lookback_days": _RUNTIME_RECORDER_HISTORY_DAYS,
                     "recorder_retention_days": _RUNTIME_RECORDER_RETENTION_DAYS,
                     "recorder_history_window_hours": round(_RUNTIME_PROFILE_HORIZON.total_seconds() / 3600, 1),
@@ -2562,6 +2791,23 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
             if candidate and candidate not in entity_ids:
                 entity_ids.append(candidate)
         return entity_ids or [_ESTIMATED_HOUSE_DEMAND_ENTITY_FALLBACK]
+
+    def _house_demand_energy_entity_ids(self) -> list[str]:
+        registry = er.async_get(self.hass)
+        current_entity_id = registry.async_get_entity_id(
+            "sensor",
+            DOMAIN,
+            f"{self._config_entry.entry_id}_house_demand_energy",
+        )
+        candidates = [
+            current_entity_id,
+            "sensor.aecc_battery_house_demand_energy",
+        ]
+        entity_ids: list[str] = []
+        for candidate in candidates:
+            if candidate and candidate not in entity_ids:
+                entity_ids.append(candidate)
+        return entity_ids or ["sensor.aecc_battery_house_demand_energy"]
 
     async def _async_away_ratio_for_window(
         self,
@@ -2727,6 +2973,74 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
             previous_time, previous_watts = effective_samples[index - 1]
             current_time, _current_watts = effective_samples[index]
             cls._add_profile_segment(buckets, start, end, previous_time, current_time, previous_watts)
+
+        return cls._profile_totals(buckets)
+
+    @classmethod
+    def _demand_profile_from_energy_history(
+        cls,
+        states: list[Any],
+        start: datetime,
+        end: datetime,
+    ) -> tuple[dict[int, dict[str, float]], float, float] | None:
+        """Build a demand profile from a cumulative kWh sensor."""
+        points: list[tuple[datetime, float]] = []
+        for state in states:
+            if state.state in ("unknown", "unavailable"):
+                continue
+            value = _as_float(state.state)
+            if value is None or value < 0:
+                continue
+            points.append((state.last_updated.astimezone(UTC), value))
+
+        if len(points) < 2:
+            return None
+
+        points.sort(key=lambda item: item[0])
+        coverage_grace = _RUNTIME_PROFILE_INTERVAL * 2
+        if points[0][0] > start + coverage_grace or points[-1][0] < end - coverage_grace:
+            return None
+
+        baseline: tuple[datetime, float] | None = None
+        effective_samples: list[tuple[datetime, float]] = []
+        for sample_time, energy_kwh in points:
+            if sample_time <= start:
+                baseline = (start, energy_kwh)
+            elif sample_time <= end:
+                effective_samples.append((sample_time, energy_kwh))
+
+        if baseline is None:
+            if not effective_samples:
+                return None
+            first_time, first_energy_kwh = effective_samples.pop(0)
+            baseline = (start, first_energy_kwh)
+            if first_time > start + coverage_grace:
+                return None
+
+        effective_samples.insert(0, baseline)
+        if len(effective_samples) < 2:
+            return None
+
+        buckets = cls._empty_profile_buckets(start, end)
+        for index in range(1, len(effective_samples)):
+            previous_time, previous_energy_kwh = effective_samples[index - 1]
+            current_time, current_energy_kwh = effective_samples[index]
+            interval_seconds = max(0.0, (current_time - previous_time).total_seconds())
+            if interval_seconds <= 0:
+                continue
+            delta_kwh = current_energy_kwh - previous_energy_kwh
+            if delta_kwh < 0:
+                # A daily/resetting source rolled over inside the window.
+                delta_kwh = current_energy_kwh
+            average_w = max(0.0, delta_kwh) * 3_600_000 / interval_seconds
+            cls._add_profile_segment(
+                buckets,
+                start,
+                end,
+                previous_time,
+                current_time,
+                average_w,
+            )
 
         return cls._profile_totals(buckets)
 
@@ -3230,9 +3544,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         recorder_history_attrs = self._current_recorder_history_attrs(now)
         solar_unavailable = self._solar_unavailable_override()
         solar_unavailable_entity = self._solar_availability_entity_id()
-        solar_forecast_scale = self._smart_solar_forecast_scale()
-        house_demand_scale = self._smart_house_demand_scale()
-
         attrs: dict[str, Any] = {
             "calculated_at": now.isoformat(),
             "recommendation_local_date": now.astimezone().date().isoformat(),
@@ -3248,10 +3559,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_unavailable_override": solar_unavailable,
             "solar_unavailable_entity": solar_unavailable_entity,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
-            "smart_solar_forecast_scale": solar_forecast_scale,
-            "smart_solar_forecast_scale_percent": round(solar_forecast_scale * 100),
-            "smart_house_demand_scale": house_demand_scale,
-            "smart_house_demand_scale_percent": round(house_demand_scale * 100),
             **fallback_attrs,
             **recorder_history_attrs,
         }
@@ -3467,13 +3774,23 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         fallback_attrs: dict[str, Any],
         recorder_history_attrs: dict[str, Any],
     ) -> tuple[float, dict[str, Any]]:
-        house_empty = bool(fallback_attrs.get("house_empty_mode"))
-        buffer_soc = (
-            _OVERNIGHT_EMPTY_HOUSE_BASE_BUFFER_SOC
-            if house_empty
-            else _OVERNIGHT_OCCUPIED_BASE_BUFFER_SOC
+        configured_buffer_soc = max(
+            0.0,
+            min(
+                _OVERNIGHT_MAX_BUFFER_SOC,
+                _as_float(
+                    getattr(
+                        self.coordinator,
+                        "smart_overnight_buffer_soc",
+                        _OVERNIGHT_DEFAULT_BUFFER_SOC,
+                    ),
+                    _OVERNIGHT_DEFAULT_BUFFER_SOC,
+                )
+                or 0.0,
+            ),
         )
-        reasons = ["empty_house_base" if house_empty else "occupied_house_base"]
+        buffer_soc = configured_buffer_soc
+        reasons = ["user_configured_base"]
 
         valid_days = int(_as_float(recorder_history_attrs.get("recorder_history_valid_days"), 0) or 0)
         history_status = str(recorder_history_attrs.get("recorder_history_status", "unknown"))
@@ -3501,13 +3818,17 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             buffer_soc += 1
             reasons.append("close_call_solar_forecast")
 
-        maximum = _OVERNIGHT_EMPTY_HOUSE_MAX_BUFFER_SOC if house_empty else _OVERNIGHT_MAX_BUFFER_SOC
-        buffer_soc = min(maximum, max(1.0, buffer_soc))
+        buffer_soc = min(_OVERNIGHT_MAX_BUFFER_SOC, max(0.0, buffer_soc))
         return buffer_soc, {
+            "configured_buffer_soc": configured_buffer_soc,
+            "automatic_buffer_adjustment_soc": round(
+                max(0.0, buffer_soc - configured_buffer_soc),
+                1,
+            ),
             "buffer_soc": buffer_soc,
             "dynamic_buffer_soc": buffer_soc,
             "dynamic_buffer_reasons": reasons,
-            "dynamic_buffer_max_soc": maximum,
+            "dynamic_buffer_max_soc": _OVERNIGHT_MAX_BUFFER_SOC,
             "dynamic_buffer_energy_kwh": round(capacity_kwh * buffer_soc / 100, 3),
         }
 
@@ -3725,8 +4046,10 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "battery_capacity_kwh": round(capacity_kwh, 3),
             "projected_house_demand_kwh": round(projected_house_kwh, 3),
             "projected_solar_kwh": round(projected_solar_kwh, 3),
-            "smart_house_demand_scale_percent": projection.get("smart_house_demand_scale_percent"),
-            "smart_solar_forecast_scale_percent": projection.get("smart_solar_forecast_scale_percent"),
+            "configured_buffer_soc": buffer_attrs.get("configured_buffer_soc"),
+            "automatic_buffer_adjustment_soc": buffer_attrs.get(
+                "automatic_buffer_adjustment_soc"
+            ),
             "projected_solar_surplus_kwh": round(solar_surplus_kwh, 3),
             "pre_sunrise_need_kwh": round(pre_sunrise_need_kwh, 3),
             "pre_sunrise_net_need_kwh": round(pre_sunrise_net_need_kwh, 3),
@@ -3837,18 +4160,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         return bool(getattr(self.coordinator, "solar_unavailable_override", False)) or self.hass.states.is_state(
             self._solar_availability_entity_id(),
             "Solar Unavailable",
-        )
-
-    def _smart_solar_forecast_scale(self) -> float:
-        return max(
-            0.5,
-            min(1.5, _as_float(getattr(self.coordinator, "smart_solar_forecast_scale", 1.0), 1.0) or 1.0),
-        )
-
-    def _smart_house_demand_scale(self) -> float:
-        return max(
-            0.5,
-            min(1.5, _as_float(getattr(self.coordinator, "smart_house_demand_scale", 1.0), 1.0) or 1.0),
         )
 
     def _solar_availability_entity_id(self) -> str:
@@ -4081,12 +4392,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             segment_end = min(end, current + interval)
             hours = (segment_end - current).total_seconds() / 3600
             demand_w, used_profile = self._demand_w_for_time(current, profile_start, profile, fallback_demand_w)
-            raw_demand_w = demand_w
-            demand_w *= self._smart_house_demand_scale()
             segment_demand_kwh = demand_w * hours / 1000
             segment_solar_kwh = self._solar_kwh_for_segment(current, segment_end, forecast_periods)
-            raw_segment_solar_kwh = segment_solar_kwh
-            segment_solar_kwh *= self._smart_solar_forecast_scale()
             solar_surplus_kwh += max(0.0, segment_solar_kwh - segment_demand_kwh)
             segment_solar_w = segment_solar_kwh * 1000 / hours if hours > 0 else 0.0
             if first_solar_start_at is None and segment_solar_w >= _RUNTIME_SOLAR_ACTIVE_THRESHOLD_W:
@@ -4108,8 +4415,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                     "end": segment_end,
                     "demand_kwh": segment_demand_kwh,
                     "solar_kwh": segment_solar_kwh,
-                    "raw_demand_w": raw_demand_w,
-                    "raw_solar_kwh": raw_segment_solar_kwh,
                     "solar_supports_load": solar_supports_morning,
                 }
             )
@@ -4204,10 +4509,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_forecast_path": None if solar_unavailable else self._forecast_cache_path,
             "projected_peak_house_demand_kwh": round(demand_kwh, 3),
             "projected_peak_solar_kwh": round(solar_kwh, 3),
-            "smart_house_demand_scale": self._smart_house_demand_scale(),
-            "smart_house_demand_scale_percent": round(self._smart_house_demand_scale() * 100),
-            "smart_solar_forecast_scale": self._smart_solar_forecast_scale(),
-            "smart_solar_forecast_scale_percent": round(self._smart_solar_forecast_scale() * 100),
             "projected_solar_surplus_kwh": round(solar_surplus_kwh, 3),
             "solar_unavailable_override": solar_unavailable,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
@@ -4288,13 +4589,16 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         fallback_demand_w: float,
         solar_unavailable: bool = False,
     ) -> dict[str, Any]:
-        demand_scale = self._smart_house_demand_scale()
-        solar_scale = self._smart_solar_forecast_scale()
-        peak_demand_kwh = self._project_demand_energy_kwh(start, end, now, fallback_demand_w) * demand_scale
+        peak_demand_kwh = self._project_demand_energy_kwh(start, end, now, fallback_demand_w)
         morning_end = min(end, start + timedelta(hours=5))
-        morning_gap_kwh = self._project_demand_energy_kwh(start, morning_end, now, fallback_demand_w) * demand_scale
+        morning_gap_kwh = self._project_demand_energy_kwh(
+            start,
+            morning_end,
+            now,
+            fallback_demand_w,
+        )
         raw_forecast_kwh = 0.0 if solar_unavailable else (self._state_energy_kwh(_SOLCAST_TOMORROW_ENTITY) or 0.0)
-        forecast_kwh = raw_forecast_kwh * solar_scale
+        forecast_kwh = raw_forecast_kwh
         daily_deficit_kwh = max(0.0, peak_demand_kwh - forecast_kwh)
         required_kwh = max(morning_gap_kwh, daily_deficit_kwh)
         return {
@@ -4303,10 +4607,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "projected_peak_house_demand_kwh": round(peak_demand_kwh, 3),
             "projected_peak_solar_kwh": round(forecast_kwh, 3),
             "raw_projected_peak_solar_kwh": round(raw_forecast_kwh, 3),
-            "smart_house_demand_scale": demand_scale,
-            "smart_house_demand_scale_percent": round(demand_scale * 100),
-            "smart_solar_forecast_scale": solar_scale,
-            "smart_solar_forecast_scale_percent": round(solar_scale * 100),
             "projected_solar_surplus_kwh": None,
             "solar_unavailable_override": solar_unavailable,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",

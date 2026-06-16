@@ -44,8 +44,7 @@ async def async_setup_entry(
             AeccDischargePowerSlider(coordinator, config_entry),
             AeccFeedPowerSlider(coordinator, config_entry),
             AeccPvSurplusChargeTrigger(coordinator, config_entry),
-            AeccSmartSolarForecastScale(coordinator, config_entry),
-            AeccSmartHouseDemandScale(coordinator, config_entry),
+            AeccSmartOvernightBuffer(coordinator, config_entry),
             AeccManualOvernightChargeTarget(coordinator, config_entry),
             AeccMinSoc(coordinator, config_entry),
             AeccMaxSoc(coordinator, config_entry),
@@ -291,36 +290,35 @@ class AeccPvSurplusChargeTrigger(
             _LOGGER.warning("Failed to set PV surplus charge trigger to %s W", trigger_w)
 
 
-class AeccSmartScaleSlider(
+class AeccSmartOvernightBuffer(
     CoordinatorEntity[AeccBatteryCoordinator],
     NumberEntity,
     RestoreEntity,
 ):
-    """Base class for SMART overnight tuning percentages."""
+    """User-selected baseline buffer for SMART overnight charging."""
 
     _attr_has_entity_name = True
+    _attr_name = "Overnight Buffer"
+    _attr_icon = "mdi:shield-battery"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_native_min_value = 50
-    _attr_native_max_value = 150
+    _attr_native_min_value = 0
+    _attr_native_max_value = 20
     _attr_native_step = 1
     _attr_mode = NumberMode.SLIDER
-
-    attr_name_on_coordinator: str = ""
-    default_value: int = 100
 
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._config_entry = config_entry
-        self._commanded: float = self.default_value
+        self._attr_unique_id = f"{config_entry.entry_id}_smart_overnight_buffer_soc"
+        self._commanded: float = 3
 
     async def async_added_to_hass(self) -> None:
-        """Restore the tuning value without touching the battery."""
+        """Restore the buffer without touching the battery."""
         await super().async_added_to_hass()
 
-        coordinator_scale = getattr(self.coordinator, self.attr_name_on_coordinator, 1.0)
         self._commanded = _clamp_number(
-            float(coordinator_scale) * 100,
+            float(getattr(self.coordinator, "smart_overnight_buffer_soc", 3.0)),
             float(self._attr_native_min_value),
             float(self._attr_native_max_value),
         )
@@ -336,9 +334,9 @@ class AeccSmartScaleSlider(
             except (TypeError, ValueError):
                 pass
 
-        setattr(self.coordinator, self.attr_name_on_coordinator, self._commanded / 100)
+        self.coordinator.smart_overnight_buffer_soc = self._commanded
         await self.coordinator.async_save_runtime_preferences(
-            **{self.attr_name_on_coordinator: self._commanded / 100}
+            smart_overnight_buffer_soc=self._commanded
         )
 
     @property
@@ -347,55 +345,27 @@ class AeccSmartScaleSlider(
 
     @property
     def native_value(self) -> float:
-        return round(
-            float(getattr(self.coordinator, self.attr_name_on_coordinator, 1.0)) * 100,
-            0,
-        )
+        return round(float(getattr(self.coordinator, "smart_overnight_buffer_soc", 3.0)), 0)
 
     @property
     def available(self) -> bool:
         return True
 
     async def async_set_native_value(self, value: float) -> None:
-        scale_percent = int(
+        buffer_soc = int(
             _clamp_number(
                 float(value),
                 float(self._attr_native_min_value),
                 float(self._attr_native_max_value),
             )
         )
-        self._commanded = scale_percent
-        scale = scale_percent / 100
-        setattr(self.coordinator, self.attr_name_on_coordinator, scale)
+        self._commanded = buffer_soc
+        self.coordinator.smart_overnight_buffer_soc = float(buffer_soc)
         await self.coordinator.async_save_runtime_preferences(
-            **{self.attr_name_on_coordinator: scale}
+            smart_overnight_buffer_soc=float(buffer_soc)
         )
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
-
-
-class AeccSmartSolarForecastScale(AeccSmartScaleSlider):
-    """User scaling for the Solcast forecast used by SMART overnight charging."""
-
-    _attr_name = "SMART Solar Forecast"
-    _attr_icon = "mdi:solar-power-variant"
-    attr_name_on_coordinator = "smart_solar_forecast_scale"
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator, config_entry)
-        self._attr_unique_id = f"{config_entry.entry_id}_smart_solar_forecast_scale"
-
-
-class AeccSmartHouseDemandScale(AeccSmartScaleSlider):
-    """User scaling for the house demand forecast used by SMART overnight charging."""
-
-    _attr_name = "SMART House Demand"
-    _attr_icon = "mdi:home-lightning-bolt"
-    attr_name_on_coordinator = "smart_house_demand_scale"
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator, config_entry)
-        self._attr_unique_id = f"{config_entry.entry_id}_smart_house_demand_scale"
 
 
 class AeccBatteryCapacity(CoordinatorEntity[AeccBatteryCoordinator], NumberEntity, RestoreEntity):

@@ -4,6 +4,18 @@
 
 No unreleased changes.
 
+## 1.7.3
+
+- Added cumulative Energy Dashboard solar reconciliation for additional
+  inverters such as Hoymiles. Live power remains responsive while exact energy
+  totals correct slower power polling in House Demand history.
+- Replaced the separate SMART solar and house-demand scaling sliders with one
+  Overnight Buffer slider from 0-20%, defaulting to 3%.
+- Kept the existing automatic SMART safeguards on top of the user-set baseline,
+  including weak history, incomplete timed data, low solar and close-call days.
+- Reduced early-morning solar credit slightly so the pre-sunrise recommendation
+  retains a little more battery above the configured minimum SOC.
+
 ## 1.7.2
 
 - Added automatic support for additional solar inverters configured in the
