@@ -263,7 +263,6 @@ The PS240 has been observed to accept 800 W reliably over local TCP. The integra
 
 - [Entities](docs/entities.md)
 - [Dashboard Card](docs/dashboard-card.md)
-- [AEC Cloud App Findings](docs/cloud-app-findings.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Changelog](CHANGELOG.md)
 

@@ -116,13 +116,6 @@ _GRID_METER_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_grid_meter_power"
 _HOUSE_DEMAND_DAILY_ENTITY = "sensor.aecc_battery_house_demand_daily"
 _AC_CHARGING_DAILY_ENTITY = "sensor.aferiy_ac_charging_daily"
 _HOUSE_OCCUPANCY_ENTITY = "zone.home"
-_OCTOPUS_FREE_SESSION_ENTITY = (
-    "binary_sensor.octopus_energy_a_5c18533f_octoplus_free_electricity_session"
-)
-_OCTOPUS_OFF_PEAK_ENTITY = (
-    "binary_sensor.octopus_energy_electricity_19k0195462_1900042087502_off_peak"
-)
-_OVERNIGHT_SMART_CHARGE_ENTITY = "input_boolean.overnight_smart_charge"
 _SOLAR_AVAILABILITY_ENTITY = "select.aecc_battery_solar_availability"
 _FORECAST_PERIOD = timedelta(minutes=30)
 _RUNTIME_DEMAND_HISTORY_WINDOW = timedelta(hours=3)
@@ -1221,143 +1214,6 @@ class AeccHouseDemandDailySensor(AeccHouseDemandEnergyBase):
         }
 
 
-class AeccGridMeterAgreementSensor(
-    AeccRecorderLeanMixin,
-    CoordinatorEntity[AeccBatteryCoordinator],
-    SensorEntity,
-):
-    """Diagnostic difference between AECC and Shelly grid readings."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Grid Meter Agreement"
-    _attr_icon = "mdi:scale-balance"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_grid_meter_agreement"
-        self._last_attributes: dict[str, Any] = {}
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def native_value(self) -> float | None:
-        aecc_grid_w = _as_float(self.coordinator.get_value("grid_power"))
-        shelly_grid_w, shelly_source = _signed_shelly_grid_power_w(self.hass)
-
-        if aecc_grid_w is None or shelly_grid_w is None:
-            self._last_attributes = {
-                "status": "missing_data",
-                "aecc_grid_meter_power_w": round(aecc_grid_w, 1) if aecc_grid_w is not None else None,
-                "shelly_grid_power_w": round(shelly_grid_w, 1) if shelly_grid_w is not None else None,
-                "shelly_source": shelly_source,
-                "note": "Positive is import; negative is export.",
-            }
-            return None
-
-        difference_w = aecc_grid_w - shelly_grid_w
-        abs_difference_w = abs(difference_w)
-        if abs_difference_w <= 75:
-            status = "matching"
-        elif abs_difference_w <= 250:
-            status = "minor_drift"
-        else:
-            status = "large_drift"
-
-        self._last_attributes = {
-            "status": status,
-            "aecc_grid_meter_power_w": round(aecc_grid_w, 1),
-            "shelly_grid_power_w": round(shelly_grid_w, 1),
-            "difference_w": round(difference_w, 1),
-            "absolute_difference_w": round(abs_difference_w, 1),
-            "shelly_source": shelly_source,
-            "matching_threshold_w": 75,
-            "minor_drift_threshold_w": 250,
-            "note": "Positive is import; negative is export.",
-        }
-        return round(difference_w, 1)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return dict(self._last_attributes)
-
-
-class AeccChargingReasonSensor(
-    AeccRecorderLeanMixin,
-    CoordinatorEntity[AeccBatteryCoordinator],
-    SensorEntity,
-):
-    """Human-readable reason for the current battery charge behavior."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Charging Reason"
-    _attr_icon = "mdi:message-processing-outline"
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_charging_reason"
-        self._last_attributes: dict[str, Any] = {}
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def native_value(self) -> str:
-        mode = getattr(self.coordinator, "commanded_operating_mode", None)
-        if not mode:
-            mode = self.hass.states.get("select.aecc_battery_operating_mode")
-            mode = mode.state if mode is not None else None
-
-        free_session = self.hass.states.is_state(_OCTOPUS_FREE_SESSION_ENTITY, "on")
-        off_peak = self.hass.states.is_state(_OCTOPUS_OFF_PEAK_ENTITY, "on")
-        overnight_enabled = self.hass.states.is_state(_OVERNIGHT_SMART_CHARGE_ENTITY, "on")
-        battery_soc = _state_float(self.hass, "sensor.aecc_battery_system_average_battery_soc")
-        charge_limit = _state_float(self.hass, "number.aecc_battery_charge_limit")
-
-        if free_session:
-            reason = "Free Octopus session"
-        elif off_peak and not overnight_enabled:
-            reason = "Smart charge disabled"
-        elif off_peak and overnight_enabled and battery_soc is not None and charge_limit is not None:
-            reason = "Off-peak target charge" if battery_soc <= charge_limit else "Already above target"
-        elif off_peak and overnight_enabled:
-            reason = "Off-peak target pending"
-        elif mode == "Charge":
-            reason = "Manual charge"
-        elif mode == "Discharge":
-            reason = "Manual discharge"
-        elif mode == "Feed":
-            reason = "Fixed feed"
-        elif mode in ("Self-Gen/Zero Export", "Self-Consumption"):
-            reason = "Self-consumption"
-        elif mode == "Idle":
-            reason = "Idle"
-        else:
-            reason = "Unknown"
-
-        self._last_attributes = {
-            "operating_mode": mode,
-            "free_octopus_session": free_session,
-            "off_peak": off_peak,
-            "overnight_smart_charge": overnight_enabled,
-            "battery_soc": round(battery_soc, 1) if battery_soc is not None else None,
-            "charge_limit": round(charge_limit, 1) if charge_limit is not None else None,
-        }
-        return reason
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return dict(self._last_attributes)
-
-
 class AeccAutomaticOvernightChargingStatusSensor(
     AeccRecorderLeanMixin,
     CoordinatorEntity[AeccBatteryCoordinator],
@@ -1636,32 +1492,6 @@ class AeccConnectionStatusSensor(
             "last_command_at": latest_write.get("timestamp"),
             "last_command_acknowledged": latest_write.get("response_received"),
         }
-
-
-class AeccLastSuccessfulUpdateSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
-    """Timestamp of the last successful local poll."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Last Successful Update"
-    _attr_icon = "mdi:update"
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_last_successful_update"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def native_value(self) -> datetime | None:
-        value = self.coordinator.last_successful_update
-        if value is None:
-            return None
-        return value.replace(second=0, microsecond=0)
 
 
 class AeccConsecutiveFailuresSensor(
