@@ -46,6 +46,7 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SELECT, Platform.TIME]
 
 SERVICE_SNAPSHOT_CONTROL_REGISTERS = "snapshot_control_registers"
+SERVICE_SNAPSHOT_EXPORT_REGISTERS = "snapshot_export_registers"
 SERVICE_SNAPSHOT_POWER_FLOW = "snapshot_power_flow"
 SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION = "restore_original_self_consumption"
 SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION = "restore_schedule_3_self_consumption"
@@ -54,6 +55,8 @@ OBSOLETE_EXPLORATION_SERVICES = (
     "snapshot_device_management",
 )
 MAX_SNAPSHOT_REGISTER_COUNT = 250
+EXPORT_SNAPSHOT_START_REGISTER = 3000
+EXPORT_SNAPSHOT_END_REGISTER = 3130
 FRONTEND_PATH = Path(__file__).parent / "frontend"
 FRONTEND_URL = "/aecc_battery_static"
 
@@ -451,6 +454,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     if (
         hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_CONTROL_REGISTERS)
+        and hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_EXPORT_REGISTERS)
         and hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_POWER_FLOW)
         and hass.services.has_service(DOMAIN, SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION)
         and hass.services.has_service(DOMAIN, SERVICE_RESTORE_SCHEDULE_3_SELF_CONSUMPTION)
@@ -560,6 +564,96 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
             _LOGGER.info(
                 "AECC control register snapshot %r captured for %s; %d registers changed",
+                label,
+                coordinator.device_name,
+                len(changed),
+            )
+
+    async def async_snapshot_export_registers(call: ServiceCall) -> None:
+        """Capture the known export/feed register range for discovery work."""
+        label = str(call.data.get("label") or "export_test").strip() or "export_test"
+        requested_entry_id = call.data.get("entry_id")
+
+        coordinators: list[tuple[str, AeccBatteryCoordinator]] = []
+        for entry_id, value in (hass.data.get(DOMAIN) or {}).items():
+            if requested_entry_id and entry_id != requested_entry_id:
+                continue
+            if isinstance(value, AeccBatteryCoordinator):
+                coordinators.append((entry_id, value))
+
+        if not coordinators:
+            _LOGGER.warning(
+                "AECC export register snapshot requested, but no matching coordinator was found"
+            )
+            return
+
+        for entry_id, coordinator in coordinators:
+            snapshot = await _fetch_control_register_range(
+                coordinator,
+                EXPORT_SNAPSHOT_START_REGISTER,
+                EXPORT_SNAPSHOT_END_REGISTER,
+            )
+            registers = snapshot.get("registers") or {}
+            if not isinstance(registers, dict):
+                registers = {}
+
+            previous_key = (
+                f"_last_export_register_snapshot_{entry_id}_"
+                f"{EXPORT_SNAPSHOT_START_REGISTER}_{EXPORT_SNAPSHOT_END_REGISTER}"
+            )
+            previous = hass.data[DOMAIN].get(previous_key)
+            changed = _diff_registers(previous, registers)
+            hass.data[DOMAIN][previous_key] = dict(registers)
+
+            key_registers = {
+                "3000_ems_enable": registers.get("3000"),
+                "3003_control_time_1": registers.get("3003"),
+                "3004_control_time_2": registers.get("3004"),
+                "3020_schedule_mode": registers.get("3020"),
+                "3021_ai_smart_charge": registers.get("3021"),
+                "3022_ai_smart_discharge": registers.get("3022"),
+                "3023_min_soc": registers.get("3023"),
+                "3024_max_soc": registers.get("3024"),
+                "3026_base_feed_power": registers.get("3026"),
+                "3029_unknown_export_candidate": registers.get("3029"),
+                "3030_custom_mode": registers.get("3030"),
+                "3037_pv_surplus_charge_trigger": registers.get("3037"),
+                "3039_max_feed_power": registers.get("3039"),
+            }
+
+            entity_id = (
+                "sensor."
+                f"{slugify(coordinator.device_name)}_export_register_snapshot"
+            )
+            hass.states.async_set(
+                entity_id,
+                label,
+                {
+                    "friendly_name": f"{coordinator.device_name} Export Register Snapshot",
+                    "icon": "mdi:transmission-tower-export",
+                    "label": label,
+                    "entry_id": entry_id,
+                    "host": coordinator.client.host,
+                    "fetched_at": snapshot.get("fetched_at"),
+                    "range": snapshot.get("range"),
+                    "error": snapshot.get("error"),
+                    "purpose": (
+                        "Diagnostic-only capture for discovering AFERIY export/feed "
+                        "register behaviour. This service does not write to the battery."
+                    ),
+                    "test_protocol": (
+                        "Capture before changing the app setting, change one app setting, "
+                        "then capture again with a clear label."
+                    ),
+                    "key_registers": key_registers,
+                    "changed_registers": changed,
+                    "changed_count": len(changed),
+                    "registers": registers,
+                },
+            )
+
+            _LOGGER.info(
+                "AECC export register snapshot %r captured for %s; %d registers changed",
                 label,
                 coordinator.device_name,
                 len(changed),
@@ -718,6 +812,13 @@ def _async_register_services(hass: HomeAssistant) -> None:
             DOMAIN,
             SERVICE_SNAPSHOT_POWER_FLOW,
             async_snapshot_power_flow,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SNAPSHOT_EXPORT_REGISTERS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SNAPSHOT_EXPORT_REGISTERS,
+            async_snapshot_export_registers,
         )
 
     if not hass.services.has_service(DOMAIN, SERVICE_RESTORE_ORIGINAL_SELF_CONSUMPTION):

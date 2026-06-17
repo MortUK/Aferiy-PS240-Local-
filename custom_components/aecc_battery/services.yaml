@@ -39,6 +39,30 @@ snapshot_control_registers:
           max: 9999
           mode: box
 
+snapshot_export_registers:
+  name: Snapshot export registers
+  description: >
+    Diagnostic-only action for export/feed discovery. Reads the known local
+    control register range through the existing integration connection and
+    writes the result to an Export Register Snapshot sensor. It does not send
+    any battery commands.
+  fields:
+    label:
+      name: Label
+      description: >
+        Short label for this export test step, for example export_before,
+        zero_feed_off, feed_250w, or restored_self_gen.
+      required: false
+      example: export_before
+      selector:
+        text:
+    entry_id:
+      name: Entry ID
+      description: Optional Home Assistant config entry ID. Leave blank to snapshot all AECC Battery entries.
+      required: false
+      selector:
+        text:
+
 snapshot_power_flow:
   name: Snapshot power flow
   description: >

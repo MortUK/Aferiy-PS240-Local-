@@ -1768,12 +1768,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         This sequence first clears the manual time slot, then applies the
         upstream-confirmed schedule mode 3 AI resume pattern while keeping
-        EMS enabled.
+        EMS enabled. It also reasserts the zero-feed/base-discharge latch
+        because Feed mode can otherwise be slow to release on some units.
         """
         clear_manual_payload = {
             REG_CONTROL_TIME1: SLOT_DISABLED,
             REG_CUSTOM_MODE: "0",
-            REG_BASE_DISCHARGE_POWER: "0",
+            REG_AI_SMART_DISC: "1",
+            REG_BASE_DISCHARGE_ENABLE: "1",
         }
 
         restore_ai_payload = {
@@ -1783,7 +1785,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_AI_SMART_DISC: "1",
             REG_CUSTOM_MODE: "0",
             REG_CONTROL_TIME1: SLOT_DISABLED,
-            REG_BASE_DISCHARGE_POWER: "0",
+            REG_BASE_DISCHARGE_ENABLE: "1",
         }
 
         _LOGGER.info(
@@ -2043,7 +2045,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._commanded_work_mode = self.initial_work_mode
             _LOGGER.info("Read initial work mode: %s", self.initial_work_mode)
 
-        if self.initial_base_discharge_power and self.initial_base_discharge_power > 0:
+        if (
+            custom_mode == 1
+            and self.initial_base_discharge_power
+            and self.initial_base_discharge_power > 0
+        ):
             self.initial_power = self.initial_base_discharge_power
             self._commanded_power = self.initial_base_discharge_power
             self._commanded_direction = "Feed"
