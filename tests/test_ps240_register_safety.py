@@ -79,7 +79,7 @@ def test_ps240_self_gen_restore_uses_known_good_schedule3_pattern() -> None:
         "3020": "3",
         "3021": "0",
         "3022": "1",
-        "3026": "0",
+        "3029": "1",
         "3030": "0",
         "3003": "0,00:00,00:00,0,0,0,0,0,0,100,10",
     }
@@ -95,8 +95,9 @@ def test_ps240_self_gen_restore_clears_manual_slot_first() -> None:
 
     assert payload == {
         "3003": "0,00:00,00:00,0,0,0,0,0,0,100,10",
-        "3026": "0",
         "3030": "0",
+        "3022": "1",
+        "3029": "1",
     }
 
 
