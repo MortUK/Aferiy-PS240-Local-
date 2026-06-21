@@ -158,6 +158,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model = model
         self._consecutive_failures: int = 0
         self._last_good_data: dict[str, Any] | None = None
+        self._last_good_storage_soc_count: int = 0
         self.last_successful_update: datetime | None = None
         self.last_failed_update: datetime | None = None
         self.last_failure_reason: str | None = None
@@ -212,6 +213,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._overnight_last_window_key: str | None = None
         self._overnight_last_restored_window_key: str | None = None
         self._overnight_scheduler_started_charge: bool = False
+        self._overnight_charge_confirm_count: int = 0
+        self._overnight_last_trusted_soc: float | None = None
+        self._overnight_last_trusted_soc_at: datetime | None = None
         self._overnight_locked_target_soc: int | None = None
         self._overnight_locked_target_source: str | None = None
         self._overnight_locked_target_at: datetime | None = None
@@ -285,11 +289,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Poll failed for {self.client.host}:{self.client.port}: {exc}") from exc
 
         valid = raw is not None and (raw.get("Storage_list") or raw.get("SSumInfoList"))
+        invalid_reason = "missing Storage_list/SSumInfoList"
+        if valid:
+            valid, invalid_reason = self._storage_soc_snapshot_valid(raw)
 
         if not valid:
             self._consecutive_failures += 1
             self.last_failed_update = datetime.now(UTC)
-            self.last_failure_reason = "missing Storage_list/SSumInfoList"
+            self.last_failure_reason = invalid_reason
             if self._consecutive_failures in (1, self._failure_tolerance):
                 try:
                     await self.client.async_reconnect()
@@ -298,7 +305,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._consecutive_failures == 1:
                 _LOGGER.warning(
                     "Poll response missing expected data (Storage_list/SSumInfoList). "
-                    "Raw response keys: %s, raw (truncated): %.500s",
+                    "Reason: %s. Raw response keys: %s, raw (truncated): %.500s",
+                    invalid_reason,
                     list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__,
                     raw,
                 )
@@ -319,6 +327,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._consecutive_failures = 0
         self.last_successful_update = datetime.now(UTC)
         self.last_failure_reason = None
+        self._last_good_storage_soc_count = self._storage_soc_count(raw)
         self._last_good_data = raw
         self._schedule_overnight_evaluation()
         return raw
@@ -454,6 +463,63 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return []
         entries = self.data.get("Storage_list") or []
         return [entry for entry in entries if isinstance(entry, dict)]
+
+    def _storage_soc_count(self, data: dict[str, Any] | None) -> int:
+        """Count plausible per-storage SOC entries in a raw poll response."""
+        if not data:
+            return 0
+        entries = data.get("Storage_list") or []
+        count = 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if self._safe_float(entry.get("BatterySoc")) is not None:
+                count += 1
+        return count
+
+    def _storage_soc_snapshot_valid(self, data: dict[str, Any] | None) -> tuple[bool, str]:
+        """Reject partial multi-battery snapshots before they reach HA entities.
+
+        The PS240 local TCP stream can briefly report a truncated/garbled
+        ``Storage_list`` while the cloud app remains healthy. Publishing that
+        partial list makes Battery N SOC and the system average jump to
+        impossible values, so keep the last good poll instead.
+        """
+        if not isinstance(data, dict):
+            return False, "poll response is not a mapping"
+
+        entries = data.get("Storage_list") or []
+        if not entries:
+            return True, "no Storage_list to validate"
+
+        soc_values: list[float] = []
+        zero_soc_online = False
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            soc = self._safe_float(entry.get("BatterySoc"))
+            if soc is None:
+                continue
+            soc_values.append(soc)
+            status = self._safe_int(entry.get("status") or entry.get("deviceStatus"))
+            if soc == 0 and status != 0 and self._last_good_data is not None:
+                zero_soc_online = True
+
+        count = len(soc_values)
+        if (
+            self._last_good_storage_soc_count > 1
+            and count
+            and count < self._last_good_storage_soc_count
+        ):
+            return (
+                False,
+                f"partial Storage_list SOC snapshot ({count}/{self._last_good_storage_soc_count})",
+            )
+
+        if zero_soc_online:
+            return False, "online battery reported 0% SOC in Storage_list"
+
+        return True, "Storage_list SOC snapshot accepted"
 
     def device_role_for_serial(self, serial: Any) -> str | None:
         """Return the topology role reported for a storage serial."""
@@ -776,6 +842,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._overnight_last_window_key = window["key"]
             self._overnight_scheduler_started_charge = False
             self._overnight_last_action = None
+            self._reset_overnight_charge_confirmation()
             self._clear_overnight_locked_target()
 
         target_locked = False
@@ -875,6 +942,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
 
         if target_soc is None:
+            self._reset_overnight_charge_confirmation()
             self._set_overnight_status(
                 "Waiting for target",
                 "The smart target sensor is not available yet.",
@@ -883,6 +951,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if current_soc is None:
+            self._reset_overnight_charge_confirmation()
             self._set_overnight_status(
                 "Waiting for SOC",
                 "System Average Battery SOC is not available yet.",
@@ -891,6 +960,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if now < window["effective_start"]:
+            self._reset_overnight_charge_confirmation()
             if self._overnight_scheduler_started_charge:
                 await self._overnight_restore(
                     self._overnight_last_window_key or window["key"],
@@ -908,10 +978,43 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if window["effective_start"] <= now < window["effective_end"]:
             if current_soc <= target_soc:
+                is_new_charge_start = not (
+                    self._overnight_scheduler_started_charge
+                    or self._overnight_last_action == "charge"
+                )
+                if is_new_charge_start and not self._overnight_charge_start_confirmed(
+                    current_soc, target_soc
+                ):
+                    confirm_attrs = {
+                        **base_attrs,
+                        "charge_confirm_count": self._overnight_charge_confirm_count,
+                        "charge_confirm_required": 2,
+                        "last_trusted_soc": self._overnight_last_trusted_soc,
+                    }
+                    self._set_overnight_status(
+                        "Monitoring target",
+                        "SOC is at or below target; waiting for one more stable reading before charging.",
+                        confirm_attrs,
+                    )
+                    return
                 await self._overnight_charge_to_target(target_soc, base_attrs)
             elif self._overnight_scheduler_started_charge:
-                await self._overnight_idle_above_target(target_soc, base_attrs)
+                self._remember_overnight_trusted_soc(current_soc)
+                self._reset_overnight_charge_confirmation()
+                self._set_overnight_status(
+                    "Charging to target",
+                    "Charge command has already been sent; leaving the battery BMS to hold target until off-peak ends.",
+                    {
+                        **base_attrs,
+                        "last_action": self._overnight_last_action,
+                        "last_action_at": self._overnight_last_action_at.isoformat()
+                        if self._overnight_last_action_at
+                        else None,
+                    },
+                )
             else:
+                self._remember_overnight_trusted_soc(current_soc)
+                self._reset_overnight_charge_confirmation()
                 self._set_overnight_status(
                     "Monitoring target",
                     "SOC is above target; waiting in case it falls during off-peak.",
@@ -920,6 +1023,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if window["effective_end"] <= now < window["end"]:
+            self._reset_overnight_charge_confirmation()
             await self._overnight_restore(
                 window["key"],
                 "Ending early",
@@ -946,6 +1050,35 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "Automatic overnight charging is waiting for the next cheap-rate window.",
             base_attrs,
         )
+
+    def _reset_overnight_charge_confirmation(self) -> None:
+        """Clear the short debounce used before starting overnight charge."""
+        self._overnight_charge_confirm_count = 0
+
+    def _remember_overnight_trusted_soc(self, current_soc: float) -> None:
+        """Remember a stable SOC sample for overnight charge sanity checks."""
+        self._overnight_last_trusted_soc = round(current_soc, 1)
+        self._overnight_last_trusted_soc_at = datetime.now(UTC)
+
+    def _overnight_charge_start_confirmed(
+        self,
+        current_soc: float,
+        target_soc: int,
+    ) -> bool:
+        """Require stable SOC readings before starting automatic overnight charge."""
+        now = datetime.now(UTC)
+        last_soc = self._overnight_last_trusted_soc
+        last_soc_at = self._overnight_last_trusted_soc_at
+        if last_soc is not None and last_soc_at is not None:
+            age_seconds = (now - last_soc_at).total_seconds()
+            sudden_drop = last_soc - current_soc
+            if age_seconds <= 180 and sudden_drop > 5:
+                self._reset_overnight_charge_confirmation()
+                return False
+
+        self._remember_overnight_trusted_soc(current_soc)
+        self._overnight_charge_confirm_count += 1
+        return self._overnight_charge_confirm_count >= 2
 
     async def _overnight_charge_to_target(
         self,

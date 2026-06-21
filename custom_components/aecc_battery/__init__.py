@@ -129,8 +129,6 @@ OLD_PER_BATTERY_POWER_UNIQUE_SUFFIXES = tuple(
     for suffix in ("output_power", "pv_power")
 )
 
-BATTERY_SOC_UNIQUE_SUFFIXES = tuple(f"battery_{index}_soc" for index in range(1, 16))
-
 POWER_FLOW_ATTRIBUTE_KEYS = (
     "friendly_name",
     "status",
@@ -368,7 +366,7 @@ def _async_remove_stale_battery_soc_entities(
     entry: ConfigEntry,
     coordinator: AeccBatteryCoordinator,
 ) -> None:
-    """Remove Battery N SOC slots that the master no longer reports at setup."""
+    """Keep Battery N SOC slots even when a setup snapshot is incomplete."""
     reported_slots = {
         index + 1
         for index, storage_entry in enumerate(coordinator.storage_entries)
@@ -382,17 +380,12 @@ def _async_remove_stale_battery_soc_entities(
         )
         return
 
-    registry = er.async_get(hass)
-    for slot_number, suffix in enumerate(BATTERY_SOC_UNIQUE_SUFFIXES, start=1):
-        if slot_number in reported_slots:
-            continue
-        entity_id = registry.async_get_entity_id(
-            Platform.SENSOR,
-            DOMAIN,
-            f"{entry.entry_id}_{suffix}",
-        )
-        if entity_id is not None:
-            registry.async_remove(entity_id)
+    _LOGGER.debug(
+        "AECC Battery '%s' reported Battery SOC slots %s; keeping existing "
+        "Battery N SOC entities because local Storage_list snapshots can be partial",
+        coordinator.device_name,
+        sorted(reported_slots),
+    )
 
 
 def _async_remove_withdrawn_config_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
