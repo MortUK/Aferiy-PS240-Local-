@@ -4,6 +4,18 @@
 
 No unreleased changes.
 
+## 1.7.4
+
+- Fixed SMART Overnight Charging so the local charge command uses the locked
+  recommended/manual overnight SOC target instead of the normal Charge Limit
+  slider. This prevents overnight charging continuing to 100% when Charge Limit
+  is set to 100%.
+- Improved individual Battery N SOC resilience when the master still reports a
+  battery slot but a poll omits that slot's SOC value; the sensor now holds the
+  last known value instead of briefly becoming unavailable.
+- Added regression tests for the overnight target handoff and individual
+  battery SOC hold behaviour.
+
 ## 1.7.3
 
 - Added cumulative Energy Dashboard solar reconciliation for additional

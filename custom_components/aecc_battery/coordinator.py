@@ -1094,7 +1094,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         power = int(getattr(self, "commanded_charge_power", 800) or 800)
-        success = await self.async_set_battery_control("Charge", power)
+        success = await self.async_set_battery_control(
+            "Charge",
+            power,
+            charge_soc=target_soc,
+        )
         if success:
             self._overnight_scheduler_started_charge = True
             self._overnight_locked_target_charged_during_window = True
@@ -1831,11 +1835,18 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return self._write_history[-1]
 
-    async def async_set_battery_control(self, direction: str, power_w: int) -> bool:
+    async def async_set_battery_control(
+        self,
+        direction: str,
+        power_w: int,
+        *,
+        charge_soc: int | None = None,
+    ) -> bool:
         has_storage = bool(self.data and self.data.get("Storage_list"))
         field7 = 5 if has_storage else 4
 
-        charge_soc = self._commanded_max_soc
+        charge_soc = self._commanded_max_soc if charge_soc is None else charge_soc
+        charge_soc = int(max(self._commanded_min_soc, min(charge_soc, 100)))
         discharge_soc = self._commanded_min_soc
 
         if direction == "Idle" or power_w == 0:

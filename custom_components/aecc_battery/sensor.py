@@ -662,16 +662,24 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreE
     def available(self) -> bool:
         if self._raw_value() is not None:
             return super().available
+        if self._storage_slot_present() and self._last_value is not None:
+            return super().available
         return self._last_value is not None and self._within_hold_window()
 
     @property
     def native_value(self):
         val = self._clean_value(self._raw_value())
         if val is None:
+            if self._storage_slot_present() and self._last_value is not None:
+                return self._last_value
             return self._last_value if self._within_hold_window() else None
         self._last_value = val
         self._last_accepted_at = time.time()
         return val
+
+    def _storage_slot_present(self) -> bool:
+        """Return true when the master still reports this battery slot."""
+        return self._index < len(self.coordinator.storage_entries)
 
     def _raw_value(self) -> float | None:
         val = self.coordinator.storage_entry_val(self._index, self._field)
