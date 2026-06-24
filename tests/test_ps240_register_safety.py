@@ -139,3 +139,20 @@ def test_diagnostics_labels_control_registers_we_care_about() -> None:
         "Max feed power (3039)",
     ):
         assert label in source
+
+
+def test_control_write_audit_summarises_and_skips_recent_duplicates() -> None:
+    """The control path should expose useful diagnostics and avoid rapid repeat writes."""
+    source = COORDINATOR.read_text()
+
+    assert "_DUPLICATE_WRITE_SUPPRESS_SECONDS = 10" in source
+    assert "skipped_duplicate" in source
+    assert "payload_summary" in source
+    assert "control_time_1" in source
+
+
+def test_runtime_preferences_mark_loaded_even_when_empty() -> None:
+    """A fresh install should still let entities restore and persist runtime choices."""
+    source = COORDINATOR.read_text()
+
+    assert 'if not isinstance(data, dict):\n            self.runtime_preferences_loaded = True' in source

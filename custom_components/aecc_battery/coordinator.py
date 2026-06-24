@@ -56,6 +56,24 @@ from .tcp_client import AeccTcpClient
 _LOGGER = logging.getLogger(__name__)
 _RUNTIME_CONFIG_STORAGE_VERSION = 1
 _OVERNIGHT_ROLLING_RECHECK_MIN_INCREASE_SOC = 2
+_DUPLICATE_WRITE_SUPPRESS_SECONDS = 10
+_DUPLICATE_WRITE_PREFIXES = (
+    "battery_control(",
+    "feed_power(",
+    "max_soc(",
+    "min_soc(",
+    "surplus_charge_trigger(",
+    "work_mode(",
+)
+_MORNING_TRACKER_MIN_UPDATE_SOC = 0.2
+_ADAPTIVE_MORNING_CREDIT_MIN = -0.15
+_ADAPTIVE_MORNING_CREDIT_MAX = 0.15
+_ADAPTIVE_MORNING_CREDIT_STEP = 0.02
+_ADAPTIVE_MORNING_CREDIT_DECAY = 0.98
+_ADAPTIVE_TARGET_SOC_MIN = -5.0
+_ADAPTIVE_TARGET_SOC_MAX = 5.0
+_ADAPTIVE_TARGET_SOC_STEP = 1.0
+_ADAPTIVE_TARGET_SOC_DECAY = 0.98
 
 # ── Unified field mapping ─────────────────────────────────────────────────────
 # Maps canonical sensor keys to (source, field_name, scale) tuples.
@@ -187,6 +205,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.commanded_feed_power: int = 0
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
         self.smart_overnight_buffer_soc: float = 3.0
+        self.adaptive_morning_solar_credit_adjustment: float = 0.0
+        self.adaptive_overnight_target_adjustment_soc: float = 0.0
         self.energy_dashboard_manager: Any | None = None
         self.manual_overnight_target_soc: int = 80
         self.overnight_charging_mode: str = overnight_charging_mode
@@ -340,8 +360,10 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data = await self._runtime_store.async_load()
         except (OSError, ValueError) as exc:
             _LOGGER.warning("Could not load AECC runtime config: %s", exc)
+            self.runtime_preferences_loaded = True
             return
         if not isinstance(data, dict):
+            self.runtime_preferences_loaded = True
             return
         self.runtime_preferences_loaded = True
 
@@ -352,6 +374,20 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         overnight_buffer = self._safe_float(data.get("smart_overnight_buffer_soc"))
         if overnight_buffer is not None:
             self.smart_overnight_buffer_soc = max(0.0, min(20.0, overnight_buffer))
+
+        morning_credit = self._safe_float(data.get("adaptive_morning_solar_credit_adjustment"))
+        if morning_credit is not None:
+            self.adaptive_morning_solar_credit_adjustment = max(
+                _ADAPTIVE_MORNING_CREDIT_MIN,
+                min(_ADAPTIVE_MORNING_CREDIT_MAX, morning_credit),
+            )
+
+        target_adjustment = self._safe_float(data.get("adaptive_overnight_target_adjustment_soc"))
+        if target_adjustment is not None:
+            self.adaptive_overnight_target_adjustment_soc = max(
+                _ADAPTIVE_TARGET_SOC_MIN,
+                min(_ADAPTIVE_TARGET_SOC_MAX, target_adjustment),
+            )
 
         manual_target = self._safe_int(data.get("manual_overnight_target_soc"))
         if manual_target is not None:
@@ -398,6 +434,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data = {
             "battery_capacity_kwh": round(float(self.battery_capacity_kwh), 3),
             "smart_overnight_buffer_soc": round(float(self.smart_overnight_buffer_soc), 1),
+            "adaptive_morning_solar_credit_adjustment": round(
+                float(self.adaptive_morning_solar_credit_adjustment),
+                3,
+            ),
+            "adaptive_overnight_target_adjustment_soc": round(
+                float(self.adaptive_overnight_target_adjustment_soc),
+                1,
+            ),
             "manual_overnight_target_soc": int(self.manual_overnight_target_soc),
             "overnight_charging_mode": self.overnight_charging_mode,
             "smart_tariff_preset": self.smart_tariff_preset,
@@ -763,16 +807,40 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _set_overnight_off_status(self) -> None:
         """Make the overnight status reflect a disabled scheduler immediately."""
-        self._overnight_status = {
+        next_status = {
             "state": "Off",
             "mode": OVERNIGHT_CHARGE_MODE_DISABLED,
             "reason": "Automatic overnight charging is off.",
+        }
+        current = {
+            key: value
+            for key, value in self._overnight_status.items()
+            if key != "updated_at"
+        }
+        if current == next_status:
+            return
+        self._overnight_status = {
+            **next_status,
             "updated_at": datetime.now(UTC).isoformat(),
         }
 
     def set_smart_history_status(self, attrs: dict[str, Any]) -> None:
         """Expose recorder-history quality for diagnostics and dashboards."""
-        self._smart_history_status = dict(attrs)
+        next_status = dict(attrs)
+        if next_status == self._smart_history_status:
+            return
+        self._smart_history_status = next_status
+
+    @staticmethod
+    def _clamp_float(value: float, minimum: float, maximum: float) -> float:
+        """Clamp a numeric setting to a safe range."""
+        return max(minimum, min(maximum, float(value)))
+
+    def _save_runtime_preferences_later(self) -> None:
+        """Persist learned SMART adjustments without blocking the poll loop."""
+        if self._runtime_store is None:
+            return
+        self.hass.async_create_task(self.async_save_runtime_preferences())
 
     def set_overnight_charging_mode(self, mode: str) -> None:
         """Store the automatic overnight charging mode locally."""
@@ -1358,6 +1426,10 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "charged_during_window": bool(plan.get("charged_during_window")),
             "reached_or_below_target": bool(plan.get("reached_or_below_target")),
             "carry_in_not_scored": False,
+            "adaptive_morning_solar_credit_adjustment_at_start": round(
+                self.adaptive_morning_solar_credit_adjustment,
+                3,
+            ),
             "useful_solar_start_at": useful_solar_at.isoformat(),
             "lowest_soc_before_useful_solar": None,
             "lowest_soc_at": None,
@@ -1391,7 +1463,10 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         lowest_soc = self._safe_float(tracker.get("lowest_soc_before_useful_solar"))
         if now <= useful_solar_at:
-            if lowest_soc is None or current_soc < lowest_soc:
+            if (
+                lowest_soc is None
+                or current_soc < lowest_soc - _MORNING_TRACKER_MIN_UPDATE_SOC
+            ):
                 tracker["lowest_soc_before_useful_solar"] = round(current_soc, 1)
                 tracker["lowest_soc_at"] = datetime.now(UTC).isoformat()
                 self.async_update_listeners()
@@ -1433,6 +1508,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"{spare_soc:+.1f}% versus the {reserve_floor_soc:g}% planned reserve."
             )
 
+        learning_attrs = self._update_adaptive_morning_credit(
+            spare_soc,
+            carry_in_not_scored,
+            plan,
+        )
         tracker.update(
             {
                 "state": state,
@@ -1440,11 +1520,73 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "spare_soc": spare_soc,
                 "tolerance_soc": tolerance_soc,
                 "carry_in_not_scored": carry_in_not_scored,
+                **learning_attrs,
                 "completed_at": datetime.now(UTC).isoformat(),
                 "reason": reason,
             }
         )
         self.async_update_listeners()
+
+    def _update_adaptive_morning_credit(
+        self,
+        spare_soc: float,
+        carry_in_not_scored: bool,
+        plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Nudge the pre-useful-solar credit from completed morning outcomes."""
+        old = float(self.adaptive_morning_solar_credit_adjustment)
+        if carry_in_not_scored:
+            return {
+                "adaptive_learning_applied": False,
+                "adaptive_learning_reason": "not_scored_carry_in_energy",
+                "adaptive_morning_solar_credit_adjustment": round(old, 3),
+            }
+        if bool(plan.get("solar_unavailable_override")):
+            return {
+                "adaptive_learning_applied": False,
+                "adaptive_learning_reason": "solar_unavailable_override",
+                "adaptive_morning_solar_credit_adjustment": round(old, 3),
+            }
+        if not plan.get("useful_solar_start_at"):
+            return {
+                "adaptive_learning_applied": False,
+                "adaptive_learning_reason": "no_useful_solar_start",
+                "adaptive_morning_solar_credit_adjustment": round(old, 3),
+            }
+
+        decayed = old * _ADAPTIVE_MORNING_CREDIT_DECAY
+        action = "decay_towards_neutral"
+        if spare_soc > 3.0:
+            new = decayed + _ADAPTIVE_MORNING_CREDIT_STEP
+            action = "increase_morning_solar_credit"
+        elif spare_soc < 0.8:
+            new = decayed - _ADAPTIVE_MORNING_CREDIT_STEP
+            action = "decrease_morning_solar_credit"
+        else:
+            new = decayed
+
+        new = self._clamp_float(
+            new,
+            _ADAPTIVE_MORNING_CREDIT_MIN,
+            _ADAPTIVE_MORNING_CREDIT_MAX,
+        )
+        if round(new, 3) != round(old, 3):
+            self.adaptive_morning_solar_credit_adjustment = new
+            self._save_runtime_preferences_later()
+
+        return {
+            "adaptive_learning_applied": True,
+            "adaptive_learning_action": action,
+            "adaptive_learning_reason": (
+                "Morning spare SOC was used to gently tune the early solar credit."
+            ),
+            "adaptive_morning_solar_credit_adjustment": round(new, 3),
+            "adaptive_morning_solar_credit_previous_adjustment": round(old, 3),
+            "adaptive_morning_solar_credit_bounds": [
+                _ADAPTIVE_MORNING_CREDIT_MIN,
+                _ADAPTIVE_MORNING_CREDIT_MAX,
+            ],
+        }
 
     def _record_overnight_accuracy_if_due(
         self,
@@ -1541,6 +1683,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "when the next off-peak window started."
             )
 
+        learning_attrs = self._update_adaptive_overnight_target(
+            spare_soc,
+            scored,
+            carry_in_not_scored,
+        )
         minutes_after_start = round((now - window["effective_start"]).total_seconds() / 60, 1)
         self._overnight_accuracy_recorded_window_key = str(previous_window_key)
         self._overnight_accuracy_status = {
@@ -1569,6 +1716,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "spare_soc": spare_soc,
             "whole_day_net_shortfall_kwh": shortfall_kwh,
             "tolerance_soc": tolerance_soc,
+            **learning_attrs,
             "morning_need_accuracy": dict(self._overnight_morning_accuracy),
             "checked_at": datetime.now(UTC).isoformat(),
             "minutes_after_off_peak_effective_start": minutes_after_start,
@@ -1592,16 +1740,77 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         self.async_update_listeners()
 
+    def _update_adaptive_overnight_target(
+        self,
+        spare_soc: float,
+        scored: bool,
+        carry_in_not_scored: bool,
+    ) -> dict[str, Any]:
+        """Gently tune the whole-day target from genuine solar-shortfall days."""
+        old = float(self.adaptive_overnight_target_adjustment_soc)
+        if not scored:
+            return {
+                "adaptive_target_learning_applied": False,
+                "adaptive_target_learning_reason": "not_a_scored_solar_shortfall_day",
+                "adaptive_overnight_target_adjustment_soc": round(old, 1),
+            }
+        if carry_in_not_scored:
+            return {
+                "adaptive_target_learning_applied": False,
+                "adaptive_target_learning_reason": "not_scored_carry_in_energy",
+                "adaptive_overnight_target_adjustment_soc": round(old, 1),
+            }
+
+        decayed = old * _ADAPTIVE_TARGET_SOC_DECAY
+        action = "decay_towards_neutral"
+        if spare_soc > 4.0:
+            new = decayed - _ADAPTIVE_TARGET_SOC_STEP
+            action = "reduce_future_targets"
+        elif spare_soc < 1.0:
+            new = decayed + _ADAPTIVE_TARGET_SOC_STEP
+            action = "increase_future_targets"
+        else:
+            new = decayed
+
+        new = self._clamp_float(new, _ADAPTIVE_TARGET_SOC_MIN, _ADAPTIVE_TARGET_SOC_MAX)
+        if round(new, 1) != round(old, 1):
+            self.adaptive_overnight_target_adjustment_soc = new
+            self._save_runtime_preferences_later()
+
+        return {
+            "adaptive_target_learning_applied": True,
+            "adaptive_target_learning_action": action,
+            "adaptive_target_learning_reason": (
+                "End-of-peak reserve was used to gently tune future SMART targets."
+            ),
+            "adaptive_overnight_target_adjustment_soc": round(new, 1),
+            "adaptive_overnight_target_previous_adjustment_soc": round(old, 1),
+            "adaptive_overnight_target_adjustment_bounds": [
+                _ADAPTIVE_TARGET_SOC_MIN,
+                _ADAPTIVE_TARGET_SOC_MAX,
+            ],
+        }
+
     def _set_overnight_status(
         self,
         state: str,
         reason: str,
         attrs: dict[str, Any],
     ) -> None:
-        self._overnight_status = {
+        next_status = {
             "state": state,
             "reason": reason,
             **attrs,
+        }
+        current = {
+            key: value
+            for key, value in self._overnight_status.items()
+            if key != "updated_at"
+        }
+        if current == next_status:
+            return
+        self._overnight_status = {
+            **next_status,
             "updated_at": datetime.now(UTC).isoformat(),
         }
 
@@ -1793,6 +2002,85 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Write-back verify for %s failed: %s", operation, exc)
             return None
 
+    @staticmethod
+    def _slot_summary(slot: Any) -> dict[str, Any] | None:
+        """Return a compact summary of an AECC CSV control-time slot."""
+        parts = str(slot or "").split(",")
+        if len(parts) < 11:
+            return None
+        try:
+            power_w = int(float(parts[3]))
+            charge_soc = int(float(parts[9]))
+            discharge_soc = int(float(parts[10]))
+        except (TypeError, ValueError):
+            power_w = None
+            charge_soc = None
+            discharge_soc = None
+        return {
+            "enabled": parts[0] == "1",
+            "start": parts[1],
+            "end": parts[2],
+            "power_w": power_w,
+            "mode": parts[5],
+            "charge_soc": charge_soc,
+            "discharge_soc": discharge_soc,
+        }
+
+    def _payload_summary(self, payload: dict[str, str]) -> dict[str, Any]:
+        """Summarise known registers for user-facing diagnostics."""
+        summary: dict[str, Any] = {}
+        register_names = {
+            REG_EMS_ENABLE: "ems_enabled",
+            REG_SCHEDULE_MODE: "schedule_mode",
+            REG_AI_SMART_CHARGE: "ai_smart_charge",
+            REG_AI_SMART_DISC: "ai_smart_discharge",
+            REG_MIN_SOC: "min_soc",
+            REG_MAX_SOC: "max_soc",
+            REG_BASE_DISCHARGE_POWER: "base_feed_power_w",
+            REG_BASE_DISCHARGE_ENABLE: "base_feed_enabled",
+            REG_SURPLUS_CHARGE_TRIGGER: "pv_surplus_charge_trigger_w",
+            REG_CUSTOM_MODE: "custom_mode",
+            REG_MAX_FEED_POWER: "max_feed_power_w",
+        }
+        for register, value in payload.items():
+            name = register_names.get(register)
+            if name is None:
+                continue
+            summary[name] = value
+        if REG_CONTROL_TIME1 in payload:
+            summary["control_time_1"] = self._slot_summary(payload[REG_CONTROL_TIME1])
+        return summary
+
+    def _duplicate_write_recently_confirmed(
+        self,
+        payload: dict[str, str],
+        operation: str,
+        now: datetime,
+    ) -> bool:
+        """Return true when a simple command was already confirmed moments ago."""
+        if not operation.startswith(_DUPLICATE_WRITE_PREFIXES):
+            return False
+        if not self._write_history:
+            return False
+        latest = self._write_history[-1]
+        if latest.get("operation") != operation or latest.get("payload") != payload:
+            return False
+        if latest.get("skipped_duplicate"):
+            return False
+        if latest.get("response_received") is not True:
+            return False
+        verify = latest.get("verify_result")
+        if verify is not None and any(item.get("match") is False for item in verify):
+            return False
+        timestamp = latest.get("timestamp")
+        if not isinstance(timestamp, str):
+            return False
+        try:
+            previous_at = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return False
+        return (now - previous_at).total_seconds() <= _DUPLICATE_WRITE_SUPPRESS_SECONDS
+
     async def _logged_write(self, payload: dict[str, str], operation: str) -> bool:
         """Send a control-register write and append an entry to the audit trail.
 
@@ -1801,18 +2089,32 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         device acknowledged, and the per-register verify outcome. The
         rolling buffer is exposed via ``write_history`` for diagnostics.
         """
+        now = datetime.now(UTC)
+        payload = dict(payload)
         entry: dict[str, Any] = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": now.isoformat(),
             "operation": operation,
-            "payload": dict(payload),
+            "payload": payload,
+            "payload_summary": self._payload_summary(payload),
             "response_received": False,
             "verify_result": None,
+            "result": "pending",
+            "skipped_duplicate": False,
         }
+        if self._duplicate_write_recently_confirmed(payload, operation, now):
+            entry["response_received"] = True
+            entry["result"] = "skipped_duplicate"
+            entry["skipped_duplicate"] = True
+            self._write_history.append(entry)
+            _LOGGER.debug("SET %s skipped - identical command was just confirmed", operation)
+            return True
+
         self._write_history.append(entry)
         resp = await self.client.set_control_parameters(payload)
         entry["response_received"] = resp is not None
         if resp is None:
             _LOGGER.warning("SET %s failed - no response from battery", operation)
+            entry["result"] = "no_response"
             return False
         _LOGGER.debug("SET %s response: %s", operation, resp)
         entry["verify_result"] = await self._verify_write(payload, operation)
@@ -1820,7 +2122,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             item.get("match") is False for item in entry["verify_result"]
         ):
             _LOGGER.warning("SET %s failed write-back verification", operation)
+            entry["result"] = "verify_mismatch"
             return False
+        entry["result"] = "verified" if entry["verify_result"] else "acknowledged"
         return True
 
     @property

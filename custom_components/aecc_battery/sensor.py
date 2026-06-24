@@ -131,6 +131,8 @@ _RUNTIME_PROFILE_MAX_CYCLES = 14
 _RUNTIME_RECORDER_RECENCY_DECAY = 0.9
 _RUNTIME_RECORDER_MIN_DAY_WEIGHT = 0.35
 _RUNTIME_RECORDER_SAME_WEEKDAY_BOOST = 1.25
+_RUNTIME_RECENT_MORNING_DAYS = 3
+_RUNTIME_RECENT_MORNING_MIN_DAYS = 2
 _RUNTIME_MIN_VALID_DAILY_AVERAGE_W = 150.0
 _RUNTIME_MIN_VALID_DAY_MEDIAN_FACTOR = 0.5
 _RUNTIME_SOLAR_ACTIVE_THRESHOLD_W = 100.0
@@ -161,6 +163,11 @@ _OVERNIGHT_MORNING_SUPPORT_DEMAND_FACTOR = 0.20
 _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR = 0.65
 _OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.75
 _OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.90
+_OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MIN = -0.15
+_OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MAX = 0.15
+_OVERNIGHT_RECENT_MORNING_UPLIFT_MIN_KWH = 0.15
+_OVERNIGHT_RECENT_MORNING_UPLIFT_MAX_KWH = 1.5
+_OVERNIGHT_RECENT_MORNING_UPLIFT_CAPACITY_FACTOR = 0.15
 _OVERNIGHT_BALANCED_SOLAR_RATIO = 1.0
 _OVERNIGHT_STRONG_SOLAR_RATIO = 1.2
 _OVERNIGHT_CLOSE_CALL_SOLAR_RATIO = 1.15
@@ -1565,6 +1572,13 @@ class AeccLastCommandResultSensor(
         latest = self.coordinator.latest_write
         if latest is None:
             return "No commands sent"
+        result = latest.get("result")
+        if result == "skipped_duplicate":
+            return "Skipped duplicate"
+        if result == "verify_mismatch":
+            return "Verify mismatch"
+        if result == "no_response":
+            return "No response"
         if not latest.get("response_received"):
             return "No response"
         verify = latest.get("verify_result")
@@ -2085,6 +2099,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
         self._demand_history: deque[tuple[datetime, float]] = deque(maxlen=5000)
         self._recorder_average_demand_w: float | None = None
         self._recorder_demand_profile: list[dict[str, Any]] = []
+        self._recorder_recent_morning_days: list[dict[str, Any]] = []
         self._recorder_profile_start: datetime | None = None
         self._recorder_history_attrs: dict[str, Any] = {
             "recorder_history_status": "warming",
@@ -2411,6 +2426,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
             if total_duration_seconds <= 0:
                 self._recorder_average_demand_w = None
                 self._recorder_demand_profile = []
+                self._recorder_recent_morning_days = []
                 self._recorder_history_attrs = {
                     "recorder_history_status": "warming",
                     "recorder_history_source_entity": entity_id,
@@ -2435,6 +2451,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                 demand_profile = self._profile_from_bucket_totals(profile_totals)
                 self._recorder_average_demand_w = average_w
                 self._recorder_demand_profile = demand_profile
+                self._recorder_recent_morning_days = self._recent_runtime_days(daily_averages)
                 self._recorder_history_attrs = {
                     "recorder_history_status": "ready",
                     "recorder_history_source_entity": entity_id,
@@ -2464,6 +2481,7 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_demand_w": round(average_w, 1),
                     "recorder_history_energy_kwh": round(average_window_energy_kwh, 3),
                     "recorder_history_profile_buckets": len(demand_profile),
+                    "recorder_history_recent_morning_days": len(self._recorder_recent_morning_days),
                     "recorder_history_last_refresh": refreshed_at.isoformat(),
                     "recorder_history_profile_start": now.isoformat(),
                     "recorder_history_daily_averages": self._summarise_runtime_days(daily_averages),
@@ -2609,6 +2627,22 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
             }
             for day in daily_results
         ]
+
+    @staticmethod
+    def _recent_runtime_days(daily_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        recent_days: list[dict[str, Any]] = []
+        for day in sorted(daily_results, key=lambda item: int(item.get("days_ago", 9999))):
+            if len(recent_days) >= _RUNTIME_RECENT_MORNING_DAYS:
+                break
+            recent_days.append(
+                {
+                    "days_ago": day.get("days_ago"),
+                    "source": day.get("source"),
+                    "source_entity": day.get("source_entity"),
+                    "profile_buckets": day.get("profile_buckets", {}),
+                }
+            )
+        return recent_days
 
     def _estimated_house_demand_entity_id(self) -> str:
         return self._estimated_house_demand_entity_ids()[0]
@@ -3435,6 +3469,18 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         buffer_kwh = capacity_kwh * buffer_soc / 100
         reserve_kwh = capacity_kwh * reserve_soc / 100
         usable_capacity_kwh = capacity_kwh * max(0.0, _FULL_SOC - reserve_soc) / 100
+        adaptive_target_adjustment_soc = max(
+            -5.0,
+            min(
+                5.0,
+                _as_float(
+                    getattr(self.coordinator, "adaptive_overnight_target_adjustment_soc", 0.0),
+                    0.0,
+                )
+                or 0.0,
+            ),
+        )
+        adaptive_target_adjustment_kwh = capacity_kwh * adaptive_target_adjustment_soc / 100
         base_required_ac_kwh = max(0.0, float(projection["required_start_energy_kwh"]))
         cheap_topup_attrs = self._cheap_rate_topup_attrs(projection, usable_capacity_kwh)
         cheap_topup_target_kwh = _as_float(cheap_topup_attrs.get("cheap_rate_topup_target_kwh"), 0.0) or 0.0
@@ -3458,7 +3504,13 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         required_battery_kwh = required_ac_kwh / _OVERNIGHT_DISCHARGE_EFFICIENCY
         loss_allowance_kwh = max(0.0, required_battery_kwh - required_ac_kwh)
         confidence_adjustment_kwh = capacity_kwh * confidence_adjustment_soc / 100
-        required_usable_kwh = required_battery_kwh + buffer_kwh + confidence_adjustment_kwh
+        required_usable_kwh = max(
+            0.0,
+            required_battery_kwh
+            + buffer_kwh
+            + confidence_adjustment_kwh
+            + adaptive_target_adjustment_kwh,
+        )
         uncovered_shortfall_kwh = max(0.0, required_usable_kwh - usable_capacity_kwh)
         required_usable_kwh = min(required_usable_kwh, usable_capacity_kwh)
 
@@ -3517,6 +3569,14 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                 "reserve_energy_kwh": round(reserve_kwh, 3),
                 "buffer_energy_kwh": round(buffer_kwh, 3),
                 "confidence_adjustment_energy_kwh": round(confidence_adjustment_kwh, 3),
+                "adaptive_overnight_target_adjustment_soc": round(
+                    adaptive_target_adjustment_soc,
+                    1,
+                ),
+                "adaptive_overnight_target_adjustment_energy_kwh": round(
+                    adaptive_target_adjustment_kwh,
+                    3,
+                ),
                 "usable_capacity_above_reserve_kwh": round(usable_capacity_kwh, 3),
                 "required_ac_energy_kwh": round(required_ac_kwh, 3),
                 "battery_discharge_efficiency": _OVERNIGHT_DISCHARGE_EFFICIENCY,
@@ -4292,22 +4352,54 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         no_useful_solar_forecast = useful_solar_start_at is None
         solar_to_demand_ratio = solar_kwh / demand_kwh if demand_kwh > 0 else 0.0
         if no_useful_solar_forecast:
-            pre_sunrise_solar_credit_factor = _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR
+            base_pre_sunrise_solar_credit_factor = _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR
             solar_credit_mode = "low_solar_day_partial_forecast_credit"
         elif solar_to_demand_ratio >= _OVERNIGHT_STRONG_SOLAR_RATIO:
-            pre_sunrise_solar_credit_factor = _OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR
+            base_pre_sunrise_solar_credit_factor = _OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR
             solar_credit_mode = "strong_solar_pre_useful_ramp_credit"
         elif solar_to_demand_ratio >= _OVERNIGHT_BALANCED_SOLAR_RATIO:
-            pre_sunrise_solar_credit_factor = _OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR
+            base_pre_sunrise_solar_credit_factor = _OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR
             solar_credit_mode = "balanced_solar_pre_useful_ramp_credit"
         else:
-            pre_sunrise_solar_credit_factor = _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR
+            base_pre_sunrise_solar_credit_factor = _OVERNIGHT_PRE_USEFUL_SOLAR_CREDIT_FACTOR
             solar_credit_mode = "pre_useful_solar_ramp_partial_credit"
+        adaptive_morning_adjustment = max(
+            _OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MIN,
+            min(
+                _OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MAX,
+                _as_float(
+                    getattr(
+                        self.coordinator,
+                        "adaptive_morning_solar_credit_adjustment",
+                        0.0,
+                    ),
+                    0.0,
+                )
+                or 0.0,
+            ),
+        )
+        pre_sunrise_solar_credit_factor = max(
+            0.45,
+            min(0.95, base_pre_sunrise_solar_credit_factor + adaptive_morning_adjustment),
+        )
         pre_sunrise_credited_solar_kwh = pre_sunrise_solar_kwh * pre_sunrise_solar_credit_factor
         pre_sunrise_guard_need_kwh = max(
             0.0,
             pre_sunrise_demand_kwh - pre_sunrise_credited_solar_kwh,
         )
+        recent_morning_end_at = useful_solar_start_at or morning_support_start_at
+        recent_morning_attrs = self._recent_morning_demand_uplift(
+            start,
+            recent_morning_end_at,
+            profile_start,
+            profile,
+            fallback_demand_w,
+        )
+        recent_morning_uplift_kwh = (
+            _as_float(recent_morning_attrs.get("recent_morning_demand_uplift_kwh"), 0.0)
+            or 0.0
+        )
+        pre_sunrise_guard_need_kwh += recent_morning_uplift_kwh
         solar_capable_day = (
             not solar_unavailable
             and not no_useful_solar_forecast
@@ -4368,7 +4460,17 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "pre_sunrise_house_demand_kwh": round(pre_sunrise_demand_kwh, 3),
             "pre_sunrise_solar_kwh": round(pre_sunrise_solar_kwh, 3),
             "pre_sunrise_credited_solar_kwh": round(pre_sunrise_credited_solar_kwh, 3),
+            "pre_sunrise_base_solar_credit_factor": base_pre_sunrise_solar_credit_factor,
             "pre_sunrise_solar_credit_factor": pre_sunrise_solar_credit_factor,
+            "adaptive_morning_solar_credit_adjustment": round(adaptive_morning_adjustment, 3),
+            "adaptive_morning_solar_credit_bounds": [
+                _OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MIN,
+                _OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MAX,
+            ],
+            **recent_morning_attrs,
+            "recent_morning_demand_window_end_at": (
+                recent_morning_end_at.isoformat() if recent_morning_end_at else None
+            ),
             "no_useful_solar_forecast": no_useful_solar_forecast,
             "low_solar_day_credit_factor": _OVERNIGHT_NO_USEFUL_SOLAR_CREDIT_FACTOR,
             "balanced_solar_day_credit_factor": _OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR,
@@ -4498,6 +4600,136 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             total_kwh += demand_w * hours / 1000
             current = segment_end
         return total_kwh
+
+    def _recent_morning_demand_uplift(
+        self,
+        start: datetime,
+        morning_end: datetime | None,
+        profile_start: datetime,
+        baseline_profile: dict[int, float],
+        fallback_demand_w: float,
+    ) -> dict[str, Any]:
+        if morning_end is None or morning_end <= start:
+            return {
+                "recent_morning_demand_uplift_kwh": 0.0,
+                "recent_morning_demand_status": "no_morning_window",
+            }
+        if not self._recorder_recent_morning_days:
+            return {
+                "recent_morning_demand_uplift_kwh": 0.0,
+                "recent_morning_demand_status": "waiting_for_recent_history",
+                "recent_morning_demand_days_used": 0,
+            }
+
+        baseline_kwh = self._profile_energy_between(
+            start,
+            morning_end,
+            profile_start,
+            baseline_profile,
+            fallback_demand_w,
+        )
+        recent_values: list[float] = []
+        recent_sources: list[dict[str, Any]] = []
+        for day in self._recorder_recent_morning_days:
+            buckets = day.get("profile_buckets")
+            if not isinstance(buckets, dict) or not buckets:
+                continue
+            recent_kwh = self._profile_bucket_energy_between(start, morning_end, profile_start, buckets)
+            if recent_kwh is None:
+                continue
+            recent_values.append(recent_kwh)
+            recent_sources.append(
+                {
+                    "days_ago": day.get("days_ago"),
+                    "source": day.get("source"),
+                    "source_entity": day.get("source_entity"),
+                    "energy_kwh": round(recent_kwh, 3),
+                }
+            )
+
+        if len(recent_values) < _RUNTIME_RECENT_MORNING_MIN_DAYS:
+            return {
+                "recent_morning_demand_uplift_kwh": 0.0,
+                "recent_morning_demand_status": "waiting_for_recent_history",
+                "recent_morning_demand_days_used": len(recent_values),
+                "recent_morning_demand_min_days": _RUNTIME_RECENT_MORNING_MIN_DAYS,
+                "recent_morning_demand_baseline_kwh": round(baseline_kwh, 3),
+                "recent_morning_demand_recent_days": recent_sources,
+            }
+
+        recent_average_kwh = sum(recent_values) / len(recent_values)
+        raw_uplift_kwh = max(0.0, recent_average_kwh - baseline_kwh)
+        capacity_kwh = _as_float(
+            getattr(self.coordinator, "battery_capacity_kwh", 0.0),
+            0.0,
+        ) or 0.0
+        uplift_cap_kwh = min(
+            _OVERNIGHT_RECENT_MORNING_UPLIFT_MAX_KWH,
+            max(0.0, capacity_kwh * _OVERNIGHT_RECENT_MORNING_UPLIFT_CAPACITY_FACTOR),
+        )
+        uplift_kwh = min(raw_uplift_kwh, uplift_cap_kwh)
+        if uplift_kwh < _OVERNIGHT_RECENT_MORNING_UPLIFT_MIN_KWH:
+            uplift_kwh = 0.0
+
+        status = "recent_morning_uplift_applied" if uplift_kwh > 0 else "normal_recent_morning_demand"
+        return {
+            "recent_morning_demand_uplift_kwh": round(uplift_kwh, 3),
+            "recent_morning_demand_raw_uplift_kwh": round(raw_uplift_kwh, 3),
+            "recent_morning_demand_status": status,
+            "recent_morning_demand_baseline_kwh": round(baseline_kwh, 3),
+            "recent_morning_demand_recent_average_kwh": round(recent_average_kwh, 3),
+            "recent_morning_demand_days_used": len(recent_values),
+            "recent_morning_demand_min_days": _RUNTIME_RECENT_MORNING_MIN_DAYS,
+            "recent_morning_demand_cap_kwh": round(uplift_cap_kwh, 3),
+            "recent_morning_demand_min_uplift_kwh": _OVERNIGHT_RECENT_MORNING_UPLIFT_MIN_KWH,
+            "recent_morning_demand_recent_days": recent_sources,
+        }
+
+    def _profile_energy_between(
+        self,
+        start: datetime,
+        end: datetime,
+        profile_start: datetime,
+        profile: dict[int, float],
+        fallback_demand_w: float,
+    ) -> float:
+        total_kwh = 0.0
+        current = start
+        while current < end:
+            segment_end = min(end, current + _RUNTIME_PROFILE_INTERVAL)
+            demand_w, _used_profile = self._demand_w_for_time(
+                current,
+                profile_start,
+                profile,
+                fallback_demand_w,
+            )
+            total_kwh += demand_w * (segment_end - current).total_seconds() / 3_600_000
+            current = segment_end
+        return max(0.0, total_kwh)
+
+    def _profile_bucket_energy_between(
+        self,
+        start: datetime,
+        end: datetime,
+        profile_start: datetime,
+        buckets: dict[int, dict[str, float]],
+    ) -> float | None:
+        total_kwh = 0.0
+        matched = False
+        current = start
+        horizon_seconds = _RUNTIME_PROFILE_HORIZON.total_seconds()
+        interval_seconds = _RUNTIME_PROFILE_INTERVAL.total_seconds()
+        while current < end:
+            segment_end = min(end, current + _RUNTIME_PROFILE_INTERVAL)
+            offset_seconds = (current - profile_start).total_seconds() % horizon_seconds
+            bucket_index = int(offset_seconds // interval_seconds)
+            bucket = buckets.get(bucket_index)
+            if bucket is not None and bucket.get("duration_seconds", 0.0) > 0:
+                average_w = bucket["watt_seconds"] / bucket["duration_seconds"]
+                total_kwh += average_w * (segment_end - current).total_seconds() / 3_600_000
+                matched = True
+            current = segment_end
+        return total_kwh if matched else None
 
     def _profile_by_bucket(self) -> dict[int, float]:
         profile: dict[int, float] = {}
