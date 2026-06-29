@@ -2,11 +2,16 @@
 
 ## Unreleased
 
+## 1.7.5
+
 - Added adaptive SMART Overnight Charging learning for recent heavy mornings,
   so heatwave/AC or other short-term morning demand changes can lift the
   pre-sunrise reserve without adding more dashboard sensors.
 - Reduced recorder/status churn from repeated SMART status updates and duplicate
   local control writes.
+- Backported the upstream stuck-unavailable recovery fix so a sensor can become
+  available again as soon as the device reports a fresh valid value after a
+  cleaner hold window expires.
 
 ## 1.7.4
 

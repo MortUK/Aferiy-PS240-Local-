@@ -596,6 +596,10 @@ class AeccSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
+        # If the device is reporting a fresh acceptable value again, recover
+        # immediately even if the previous cleaner hold window had expired.
+        if self.coordinator.get_value(self._canonical_key) is not None:
+            return True
         if self._last_value is None:
             return self.coordinator.last_update_success
         if self._within_hold_window():
