@@ -102,6 +102,7 @@ _SOLCAST_DETAILED_FORECAST_PATHS = (
     "solcast_solar/solcast.json",
     "solcast_solar/solcast-undampened.json",
 )
+_SOLCAST_FILE_REFRESH_INTERVAL = timedelta(minutes=5)
 _SOLCAST_REMAINING_TODAY_ENTITY = "sensor.solcast_pv_forecast_forecast_remaining_today"
 _SOLCAST_NEXT_HOUR_ENTITY = "sensor.solcast_pv_forecast_forecast_next_hour"
 _SOLCAST_POWER_NOW_ENTITY = "sensor.solcast_pv_forecast_power_now"
@@ -138,6 +139,60 @@ _RUNTIME_MIN_VALID_DAY_MEDIAN_FACTOR = 0.5
 _RUNTIME_SOLAR_ACTIVE_THRESHOLD_W = 100.0
 _ESTIMATED_HOUSE_DEMAND_ENTITY_FALLBACK = "sensor.aecc_battery_estimated_house_demand"
 _PV_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_pv_power"
+
+
+def _read_solcast_forecast_file(
+    paths: list[str],
+    cache_path: str | None,
+    cache_mtime: float | None,
+) -> tuple[str, float, list[dict[str, Any]]] | None:
+    """Read the first available Solcast forecast file off the event loop."""
+    for path in paths:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+
+        if path == cache_path and mtime == cache_mtime:
+            return path, mtime, []
+
+        try:
+            with open(path, encoding="utf-8") as forecast_file:
+                data = json.load(forecast_file)
+        except (OSError, json.JSONDecodeError) as exc:
+            _LOGGER.debug("Could not read Solcast forecast file %s: %s", path, exc)
+            continue
+
+        return path, mtime, _combine_solcast_site_forecasts(data)
+
+    return None
+
+
+def _combine_solcast_site_forecasts(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Combine Solcast per-site forecast arrays into one forecast stream."""
+    siteinfo = data.get("siteinfo")
+    if not isinstance(siteinfo, dict):
+        return []
+
+    combined: dict[str, float] = {}
+    for site in siteinfo.values():
+        if not isinstance(site, dict):
+            continue
+        forecasts = site.get("forecasts")
+        if not isinstance(forecasts, list):
+            continue
+        for item in forecasts:
+            if not isinstance(item, dict):
+                continue
+            period_start = item.get("period_start")
+            forecast_kw = _as_float(item.get("pv_estimate"), 0.0) or 0.0
+            if period_start:
+                combined[str(period_start)] = combined.get(str(period_start), 0.0) + forecast_kw
+
+    return [
+        {"period_start": period_start, "pv_estimate": forecast_kw}
+        for period_start, forecast_kw in sorted(combined.items())
+    ]
 _PV_CHARGING_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_pv_charging_power"
 _AC_CHARGING_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_ac_charging_power"
 _TOTAL_CHARGE_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_total_charge_power"
@@ -1619,6 +1674,8 @@ class AeccEstimatedChargeTimeSensor(
         self._forecast_cache_mtime: float | None = None
         self._forecast_cache_path: str | None = None
         self._forecast_cache: list[dict[str, Any]] = []
+        self._forecast_cache_loaded_at: datetime | None = None
+        self._forecast_cache_refreshing = False
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -1826,30 +1883,39 @@ class AeccEstimatedChargeTimeSensor(
         return house_load_w / 1000
 
     def _load_solcast_forecasts(self) -> list[dict[str, Any]]:
-        for relative_path in _SOLCAST_DETAILED_FORECAST_PATHS:
-            path = self.hass.config.path(relative_path)
-            try:
-                mtime = os.path.getmtime(path)
-            except OSError:
-                continue
+        self._schedule_solcast_forecast_refresh()
+        return self._forecast_cache
 
-            if path == self._forecast_cache_path and mtime == self._forecast_cache_mtime:
-                return self._forecast_cache
+    def _schedule_solcast_forecast_refresh(self) -> None:
+        now = datetime.now(UTC)
+        if self._forecast_cache_refreshing:
+            return
+        if (
+            self._forecast_cache_loaded_at is not None
+            and now - self._forecast_cache_loaded_at < _SOLCAST_FILE_REFRESH_INTERVAL
+        ):
+            return
+        self._forecast_cache_refreshing = True
+        self.hass.async_create_task(self._async_refresh_solcast_forecasts())
 
-            try:
-                with open(path, encoding="utf-8") as forecast_file:
-                    data = json.load(forecast_file)
-            except (OSError, json.JSONDecodeError) as exc:
-                _LOGGER.debug("Could not read Solcast forecast file %s: %s", path, exc)
-                continue
-
-            forecasts = self._combine_solcast_site_forecasts(data)
-            self._forecast_cache_path = path
-            self._forecast_cache_mtime = mtime
-            self._forecast_cache = forecasts
-            return forecasts
-
-        return []
+    async def _async_refresh_solcast_forecasts(self) -> None:
+        paths = [self.hass.config.path(relative_path) for relative_path in _SOLCAST_DETAILED_FORECAST_PATHS]
+        try:
+            result = await self.hass.async_add_executor_job(
+                _read_solcast_forecast_file,
+                paths,
+                self._forecast_cache_path,
+                self._forecast_cache_mtime,
+            )
+            self._forecast_cache_loaded_at = datetime.now(UTC)
+            if result is not None:
+                path, mtime, forecasts = result
+                self._forecast_cache_path = path
+                self._forecast_cache_mtime = mtime
+                if forecasts:
+                    self._forecast_cache = forecasts
+        finally:
+            self._forecast_cache_refreshing = False
 
     def _combine_solcast_site_forecasts(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         siteinfo = data.get("siteinfo")
@@ -3358,6 +3424,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         self._forecast_cache_mtime: float | None = None
         self._forecast_cache_path: str | None = None
         self._forecast_cache: list[dict[str, Any]] = []
+        self._forecast_cache_loaded_at: datetime | None = None
+        self._forecast_cache_refreshing = False
         self._previous_recommended_soc: int | None = None
         self._previous_recommendation_date: str | None = None
 
@@ -4797,30 +4865,39 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         return total_kwh
 
     def _load_solcast_forecasts(self) -> list[dict[str, Any]]:
-        for relative_path in _SOLCAST_DETAILED_FORECAST_PATHS:
-            path = self.hass.config.path(relative_path)
-            try:
-                mtime = os.path.getmtime(path)
-            except OSError:
-                continue
+        self._schedule_solcast_forecast_refresh()
+        return self._forecast_cache
 
-            if path == self._forecast_cache_path and mtime == self._forecast_cache_mtime:
-                return self._forecast_cache
+    def _schedule_solcast_forecast_refresh(self) -> None:
+        now = datetime.now(UTC)
+        if self._forecast_cache_refreshing:
+            return
+        if (
+            self._forecast_cache_loaded_at is not None
+            and now - self._forecast_cache_loaded_at < _SOLCAST_FILE_REFRESH_INTERVAL
+        ):
+            return
+        self._forecast_cache_refreshing = True
+        self.hass.async_create_task(self._async_refresh_solcast_forecasts())
 
-            try:
-                with open(path, encoding="utf-8") as forecast_file:
-                    data = json.load(forecast_file)
-            except (OSError, json.JSONDecodeError) as exc:
-                _LOGGER.debug("Could not read Solcast forecast file %s: %s", path, exc)
-                continue
-
-            forecasts = self._combine_solcast_site_forecasts(data)
-            self._forecast_cache_path = path
-            self._forecast_cache_mtime = mtime
-            self._forecast_cache = forecasts
-            return forecasts
-
-        return []
+    async def _async_refresh_solcast_forecasts(self) -> None:
+        paths = [self.hass.config.path(relative_path) for relative_path in _SOLCAST_DETAILED_FORECAST_PATHS]
+        try:
+            result = await self.hass.async_add_executor_job(
+                _read_solcast_forecast_file,
+                paths,
+                self._forecast_cache_path,
+                self._forecast_cache_mtime,
+            )
+            self._forecast_cache_loaded_at = datetime.now(UTC)
+            if result is not None:
+                path, mtime, forecasts = result
+                self._forecast_cache_path = path
+                self._forecast_cache_mtime = mtime
+                if forecasts:
+                    self._forecast_cache = forecasts
+        finally:
+            self._forecast_cache_refreshing = False
 
     @staticmethod
     def _combine_solcast_site_forecasts(data: dict[str, Any]) -> list[dict[str, Any]]:

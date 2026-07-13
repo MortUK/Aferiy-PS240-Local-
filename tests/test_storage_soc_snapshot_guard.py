@@ -20,4 +20,4 @@ def test_online_zero_soc_storage_snapshots_are_rejected() -> None:
 
     assert "online battery reported 0% SOC in Storage_list" in source
     assert "soc == 0 and status != 0" in source
-    assert "self._last_good_data is not None" in source
+    assert "soc == 0 and status != 0 and self._last_good_data is not None" not in source

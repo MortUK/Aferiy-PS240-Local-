@@ -65,6 +65,7 @@ _DUPLICATE_WRITE_PREFIXES = (
     "surplus_charge_trigger(",
     "work_mode(",
 )
+_DEVICE_MANAGEMENT_REFRESH_INTERVAL = timedelta(minutes=30)
 _MORNING_TRACKER_MIN_UPDATE_SOC = 0.2
 _ADAPTIVE_MORNING_CREDIT_MIN = -0.15
 _ADAPTIVE_MORNING_CREDIT_MAX = 0.15
@@ -188,6 +189,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.device_clock: str | None = None
         self.device_sdk_version: str | None = None
         self.wifi_rssi_dbm: int | None = None
+        self._last_device_management_refresh: datetime | None = None
         self.topology_device_count: int = 0
         self.topology_reported_count: int = 0
         self.inverter_count: int = 0
@@ -349,8 +351,24 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_failure_reason = None
         self._last_good_storage_soc_count = self._storage_soc_count(raw)
         self._last_good_data = raw
+        await self._async_maybe_refresh_device_management()
         self._schedule_overnight_evaluation()
         return raw
+
+    async def _async_maybe_refresh_device_management(self) -> None:
+        """Refresh slower-changing device metadata without affecting live polling."""
+        now = datetime.now(UTC)
+        if (
+            self._last_device_management_refresh is not None
+            and now - self._last_device_management_refresh < _DEVICE_MANAGEMENT_REFRESH_INTERVAL
+        ):
+            return
+
+        try:
+            await self.async_probe_device_management()
+        except Exception as exc:  # noqa: BLE001 - diagnostic metadata must not break polling
+            self._last_device_management_refresh = now
+            _LOGGER.debug("Periodic DeviceManagement refresh failed: %s", exc)
 
     async def async_load_runtime_preferences(self) -> None:
         """Restore user SMART/config selections from HA storage before first poll."""
@@ -545,8 +563,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if soc is None:
                 continue
             soc_values.append(soc)
-            status = self._safe_int(entry.get("status") or entry.get("deviceStatus"))
-            if soc == 0 and status != 0 and self._last_good_data is not None:
+            status = self._safe_int(
+                entry.get("status")
+                if entry.get("status") is not None
+                else entry.get("deviceStatus")
+            )
+            if soc == 0 and status != 0:
                 zero_soc_online = True
 
         count = len(soc_values)
@@ -2509,6 +2531,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_probe_device_management(self) -> None:
         """Refresh safe device identity, topology and health metadata."""
+        self._last_device_management_refresh = datetime.now(UTC)
         info = await self.client.get_device_management_info()
         if info is None:
             _LOGGER.debug("DeviceManagement probe returned nothing (not supported on all AECC devices)")

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.7.6
+
+- Fixed startup SOC filtering for FOSSiBOT/PS240-compatible units that can briefly
+  report an online battery as `0%` while the app and LCD still show the real SOC.
+  The integration now rejects that first bad zero instead of writing it into Home
+  Assistant history.
+- Refreshed Wi-Fi strength and safe device metadata every 30 minutes after a
+  successful poll, rather than only at setup/reload.
+- Moved Solcast detailed forecast file reads off the event loop and cached them
+  for short intervals to reduce dashboard/update load.
+
 ## 1.7.5
 
 - Added adaptive SMART Overnight Charging learning for recent heavy mornings,

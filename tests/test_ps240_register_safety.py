@@ -156,3 +156,13 @@ def test_runtime_preferences_mark_loaded_even_when_empty() -> None:
     source = COORDINATOR.read_text()
 
     assert 'if not isinstance(data, dict):\n            self.runtime_preferences_loaded = True' in source
+
+
+def test_device_management_metadata_refreshes_periodically_after_good_poll() -> None:
+    """Wi-Fi strength and metadata should refresh gently without affecting polling."""
+    source = COORDINATOR.read_text()
+
+    assert "_DEVICE_MANAGEMENT_REFRESH_INTERVAL = timedelta(minutes=30)" in source
+    assert "await self._async_maybe_refresh_device_management()" in source
+    assert "Periodic DeviceManagement refresh failed" in source
+    assert "self._last_device_management_refresh = datetime.now(UTC)" in source
