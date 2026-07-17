@@ -3,7 +3,7 @@
 ![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.jpeg)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.7.6-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.7.7-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-RichardOwen-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/richardowen)
@@ -20,7 +20,8 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Experimental Feed mode with a passive Base Feed Power target
 - Local-first automatic overnight charging with smart or manual SOC targets
 - Charge and discharge SOC limits
-- Charge/discharge power targets from 800 W to 1200 W for cautious PS240 testing
+- Charge power targets from 200 W to 1200 W, defaulting to 800 W on new installs
+- Discharge power targets from 800 W to 1200 W for cautious PS240 testing
 - PV surplus charge trigger for systems with unmanaged microinverters
 - Physics-aware filtering for occasional invalid SOC/power readings
 - Home Assistant diagnostics export support

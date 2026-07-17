@@ -79,6 +79,7 @@ def test_ps240_self_gen_restore_uses_known_good_schedule3_pattern() -> None:
         "3020": "3",
         "3021": "0",
         "3022": "1",
+        "3026": "0",
         "3029": "1",
         "3030": "0",
         "3003": "0,00:00,00:00,0,0,0,0,0,0,100,10",
@@ -97,6 +98,7 @@ def test_ps240_self_gen_restore_clears_manual_slot_first() -> None:
         "3003": "0,00:00,00:00,0,0,0,0,0,0,100,10",
         "3030": "0",
         "3022": "1",
+        "3026": "0",
         "3029": "1",
     }
 
@@ -120,6 +122,10 @@ def test_diagnostics_redacts_private_device_details() -> None:
         "longitude",
     ):
         assert repr(sensitive_key) in source or f'"{sensitive_key}"' in source
+
+    assert "**coordinator.diagnostic_state" in source
+    assert "coordinator._suspect" not in source
+    assert "coordinator._storage_topology" not in source
 
 
 def test_diagnostics_labels_control_registers_we_care_about() -> None:

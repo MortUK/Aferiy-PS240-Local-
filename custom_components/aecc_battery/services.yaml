@@ -66,8 +66,8 @@ snapshot_export_registers:
 snapshot_power_flow:
   name: Snapshot power flow
   description: >
-    Captures the current AECC Battery, grid agreement, and AFERIY cloud helper
-    entity states into one diagnostic sensor for troubleshooting.
+    Captures the current registered entities for this integration into one
+    diagnostic sensor for troubleshooting.
   fields:
     label:
       name: Label

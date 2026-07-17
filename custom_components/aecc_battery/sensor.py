@@ -24,11 +24,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.dt import utcnow
 
 from .const import (
-    CONF_ADVANCED_ENERGY_SENSORS,
     CONF_OFF_PEAK_END,
     CONF_OFF_PEAK_START,
     CONF_TARIFF_PRESET,
-    DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_OFF_PEAK_END,
     DEFAULT_OFF_PEAK_START,
     DEFAULT_TARIFF_PRESET,
@@ -103,19 +101,10 @@ _SOLCAST_DETAILED_FORECAST_PATHS = (
     "solcast_solar/solcast-undampened.json",
 )
 _SOLCAST_FILE_REFRESH_INTERVAL = timedelta(minutes=5)
-_SOLCAST_REMAINING_TODAY_ENTITY = "sensor.solcast_pv_forecast_forecast_remaining_today"
-_SOLCAST_NEXT_HOUR_ENTITY = "sensor.solcast_pv_forecast_forecast_next_hour"
-_SOLCAST_POWER_NOW_ENTITY = "sensor.solcast_pv_forecast_power_now"
 _SOLCAST_TOMORROW_ENTITY = "sensor.solcast_pv_forecast_forecast_tomorrow"
-_SHELLY_IMPORT_ENTITY = "sensor.shelly_grid_import_power"
-_SHELLY_EXPORT_ENTITY = "sensor.shelly_grid_export_power"
-_SHELLY_GRID_POWER_CANDIDATES = (
-    "sensor.shellypro3em_841fe8916604_power",
-    "sensor.shellypro3em_841fe8916604_phase_a_power",
-)
 _GRID_METER_POWER_ENTITY_FALLBACK = "sensor.aecc_battery_grid_meter_power"
-_HOUSE_DEMAND_DAILY_ENTITY = "sensor.aecc_battery_house_demand_daily"
-_AC_CHARGING_DAILY_ENTITY = "sensor.aferiy_ac_charging_daily"
+_HOUSE_DEMAND_DAILY_ENTITY_FALLBACK = "sensor.aecc_battery_house_demand_daily"
+_LEGACY_AC_CHARGING_DAILY_ENTITY = "sensor.aferiy_ac_charging_daily"
 _HOUSE_OCCUPANCY_ENTITY = "zone.home"
 _SOLAR_AVAILABILITY_ENTITY = "select.aecc_battery_solar_availability"
 _FORECAST_PERIOD = timedelta(minutes=30)
@@ -256,6 +245,69 @@ def _as_float(value: Any, default: float | None = None) -> float | None:
         return default
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    """Parse a forecast timestamp and normalise it to UTC."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _format_duration(delta: timedelta) -> str:
+    """Format a duration compactly for display sensors."""
+    total_minutes = max(0, int(round(delta.total_seconds() / 60)))
+    days, remainder = divmod(total_minutes, 24 * 60)
+    hours, minutes = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _compose_required_usable_energy_kwh(
+    required_battery_kwh: float,
+    buffer_kwh: float,
+    confidence_adjustment_kwh: float,
+    adaptive_target_adjustment_kwh: float,
+) -> float:
+    """Apply adaptive corrections to demand without consuming safety headroom."""
+    adjusted_demand_kwh = max(
+        0.0,
+        required_battery_kwh + adaptive_target_adjustment_kwh,
+    )
+    return max(
+        0.0,
+        adjusted_demand_kwh + buffer_kwh + confidence_adjustment_kwh,
+    )
+
+
+def _planned_handover_floor_soc(
+    reserve_soc: float,
+    configured_buffer_soc: float,
+) -> float:
+    """Return the intended minimum SOC when useful solar takes over."""
+    return min(
+        _FULL_SOC,
+        max(0.0, reserve_soc) + max(0.0, configured_buffer_soc),
+    )
+
+
+def _effective_adaptive_target_adjustment_soc(
+    requested_adjustment_soc: float,
+    protect_solar_handover_buffer: bool,
+) -> float:
+    """Prevent downward learning from eroding a useful-solar handover buffer."""
+    if protect_solar_handover_buffer:
+        return max(0.0, requested_adjustment_soc)
+    return requested_adjustment_soc
+
+
 def _state_float(
     hass: HomeAssistant,
     entity_id: str,
@@ -265,19 +317,6 @@ def _state_float(
     if state is None or state.state in ("unknown", "unavailable"):
         return default
     return _as_float(state.state, default)
-
-
-def _signed_shelly_grid_power_w(hass: HomeAssistant) -> tuple[float | None, str | None]:
-    for entity_id in _SHELLY_GRID_POWER_CANDIDATES:
-        value = _state_float(hass, entity_id)
-        if value is not None:
-            return value, entity_id
-
-    import_w = _state_float(hass, _SHELLY_IMPORT_ENTITY)
-    export_w = _state_float(hass, _SHELLY_EXPORT_ENTITY)
-    if import_w is None and export_w is None:
-        return None, None
-    return (import_w or 0.0) - (export_w or 0.0), "shelly_import_export_helpers"
 
 
 def _house_empty_from_state(state: str | None) -> tuple[bool | None, int | None]:
@@ -989,39 +1028,6 @@ class AeccTotalBatteryOutputPowerSensor(CoordinatorEntity[AeccBatteryCoordinator
             return None
 
 
-class AeccBatteryPowerSensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
-    """Single signed value: positive = charging, negative = discharging."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Battery Power"
-    _attr_icon = "mdi:battery-sync"
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_battery_power"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def native_value(self) -> float | None:
-        charge = self.coordinator.get_value("battery_charging_power") or 0
-        ac_charge = self.coordinator.get_value("ac_charging_power") or 0
-        discharge = self.coordinator.get_value("battery_discharging_power") or 0
-        total_discharge = self.coordinator.get_value("total_battery_output_power") or 0
-        try:
-            effective_charge = max(float(charge), float(ac_charge))
-            effective_discharge = max(float(discharge), float(total_discharge))
-            return round(effective_charge - effective_discharge, 1)
-        except (TypeError, ValueError):
-            return None
-
-
 class AeccEstimatedHouseDemandSensor(
     AeccRecorderLeanMixin,
     CoordinatorEntity[AeccBatteryCoordinator],
@@ -1656,500 +1662,6 @@ class AeccLastCommandResultSensor(
         return dict(latest)
 
 
-class AeccEstimatedChargeTimeSensor(
-    AeccRecorderLeanMixin,
-    CoordinatorEntity[AeccBatteryCoordinator],
-    SensorEntity,
-):
-    """Display-only estimate of time until the battery reaches 100% SOC."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Estimated Charge Time"
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_estimated_charge_time"
-        self._last_attributes: dict[str, Any] = {}
-        self._forecast_cache_mtime: float | None = None
-        self._forecast_cache_path: str | None = None
-        self._forecast_cache: list[dict[str, Any]] = []
-        self._forecast_cache_loaded_at: datetime | None = None
-        self._forecast_cache_refreshing = False
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def icon(self) -> str:
-        status = self._last_attributes.get("status")
-        if status == "full":
-            return "mdi:battery-check"
-        if status in ("not_enough_forecast", "not_enough_today"):
-            return "mdi:battery-alert"
-        return "mdi:battery-clock"
-
-    @property
-    def native_value(self) -> str:
-        state, attrs = self._calculate_estimate()
-        self._last_attributes = attrs
-        return state
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return dict(self._last_attributes)
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.last_update_success
-
-    def _calculate_estimate(self) -> tuple[str, dict[str, Any]]:
-        now = datetime.now(UTC)
-        soc = self._as_float(self.coordinator.get_value("battery_soc"))
-        capacity_kwh = self._as_float(
-            getattr(self.coordinator, "battery_capacity_kwh", DEFAULT_BATTERY_CAPACITY_KWH),
-            DEFAULT_BATTERY_CAPACITY_KWH,
-        )
-        target_soc = _FULL_SOC
-
-        attrs: dict[str, Any] = {
-            "calculated_at": now.isoformat(),
-            "target_soc": target_soc,
-            "battery_capacity_kwh": round(capacity_kwh, 2),
-            "solar_forecast_source": None,
-            "forecast_remaining_today_kwh": self._state_energy_kwh(_SOLCAST_REMAINING_TODAY_ENTITY),
-        }
-
-        if soc is None or capacity_kwh <= 0:
-            attrs["status"] = "missing_data"
-            attrs["reason"] = "Battery SOC or capacity is unavailable"
-            return "Unknown", attrs
-
-        energy_needed_kwh = capacity_kwh * max(0.0, target_soc - soc) / 100.0
-        attrs.update(
-            {
-                "current_soc": round(soc, 1),
-                "energy_needed_kwh": round(energy_needed_kwh, 2),
-            }
-        )
-
-        if energy_needed_kwh <= 0.05:
-            attrs["status"] = "full"
-            attrs["estimated_full_at"] = now.isoformat()
-            return "Full", attrs
-
-        home_load_kw = self._estimate_home_load_kw()
-        attrs["estimated_home_load_w"] = round(home_load_kw * 1000, 1)
-
-        estimate = self._estimate_from_detailed_forecast(now, energy_needed_kwh, home_load_kw)
-        if estimate is None:
-            estimate = self._estimate_from_solcast_entities(now, energy_needed_kwh, home_load_kw)
-
-        attrs.update(estimate["attributes"])
-
-        eta = estimate.get("eta")
-        if isinstance(eta, datetime):
-            attrs["status"] = "estimated"
-            attrs["estimated_full_at"] = eta.isoformat()
-            attrs["hours_to_full"] = round((eta - now).total_seconds() / 3600, 2)
-            return self._format_duration(eta - now), attrs
-
-        return estimate["state"], attrs
-
-    def _estimate_from_detailed_forecast(
-        self,
-        now: datetime,
-        energy_needed_kwh: float,
-        home_load_kw: float,
-    ) -> dict[str, Any] | None:
-        forecasts = self._load_solcast_forecasts()
-        if not forecasts:
-            return None
-
-        cumulative_kwh = 0.0
-        raw_forecast_kwh = 0.0
-
-        for item in forecasts:
-            period_start = self._parse_datetime(item.get("period_start"))
-            forecast_kw = self._as_float(item.get("pv_estimate"), 0.0)
-            if period_start is None or forecast_kw <= 0:
-                continue
-
-            period_end = period_start + _FORECAST_PERIOD
-            if period_end <= now:
-                continue
-
-            start = max(period_start, now)
-            hours = (period_end - start).total_seconds() / 3600
-            if hours <= 0:
-                continue
-
-            raw_forecast_kwh += forecast_kw * hours
-            net_charge_kw = max(0.0, forecast_kw - home_load_kw)
-            if net_charge_kw <= 0:
-                continue
-
-            segment_kwh = net_charge_kw * hours
-            if cumulative_kwh + segment_kwh >= energy_needed_kwh:
-                remaining_in_segment_kwh = energy_needed_kwh - cumulative_kwh
-                hours_into_segment = remaining_in_segment_kwh / net_charge_kw
-                return {
-                    "eta": start + timedelta(hours=hours_into_segment),
-                    "attributes": {
-                        "solar_forecast_source": "Solcast detailed forecast file",
-                        "solar_forecast_path": self._forecast_cache_path,
-                        "usable_forecast_kwh": round(cumulative_kwh + segment_kwh, 2),
-                        "raw_future_forecast_kwh": round(raw_forecast_kwh, 2),
-                        "method": "detailed_forecast_minus_current_home_load",
-                    },
-                }
-
-            cumulative_kwh += segment_kwh
-
-        return {
-            "state": "Not in forecast",
-            "attributes": {
-                "status": "not_enough_forecast",
-                "solar_forecast_source": "Solcast detailed forecast file",
-                "solar_forecast_path": self._forecast_cache_path,
-                "usable_forecast_kwh": round(cumulative_kwh, 2),
-                "raw_future_forecast_kwh": round(raw_forecast_kwh, 2),
-                "method": "detailed_forecast_minus_current_home_load",
-            },
-        }
-
-    def _estimate_from_solcast_entities(
-        self,
-        now: datetime,
-        energy_needed_kwh: float,
-        home_load_kw: float,
-    ) -> dict[str, Any]:
-        remaining_today_kwh = self._state_energy_kwh(_SOLCAST_REMAINING_TODAY_ENTITY)
-        next_hour_kwh = self._state_energy_kwh(_SOLCAST_NEXT_HOUR_ENTITY)
-        power_now_kw = self._state_power_kw(_SOLCAST_POWER_NOW_ENTITY)
-
-        attrs = {
-            "solar_forecast_source": "Solcast sensors",
-            "method": "remaining_today_and_next_hour_sensors",
-            "usable_forecast_kwh": None,
-            "next_hour_forecast_kwh": next_hour_kwh,
-            "power_now_kw": power_now_kw,
-        }
-
-        if remaining_today_kwh is None:
-            return {
-                "state": "Unknown",
-                "attributes": {
-                    **attrs,
-                    "status": "missing_data",
-                    "reason": f"{_SOLCAST_REMAINING_TODAY_ENTITY} is unavailable",
-                },
-            }
-
-        usable_today_kwh = max(0.0, remaining_today_kwh)
-        attrs["usable_forecast_kwh"] = round(usable_today_kwh, 2)
-        if usable_today_kwh < energy_needed_kwh:
-            return {
-                "state": "Not today",
-                "attributes": {
-                    **attrs,
-                    "status": "not_enough_today",
-                },
-            }
-
-        rate_kw = 0.0
-        if next_hour_kwh is not None:
-            rate_kw = max(rate_kw, next_hour_kwh - home_load_kw)
-        if power_now_kw is not None:
-            rate_kw = max(rate_kw, power_now_kw - home_load_kw)
-
-        if rate_kw <= 0:
-            return {
-                "state": "Enough sun later",
-                "attributes": {
-                    **attrs,
-                    "status": "waiting_for_sun",
-                },
-            }
-
-        return {
-            "eta": now + timedelta(hours=energy_needed_kwh / rate_kw),
-            "attributes": attrs,
-        }
-
-    def _estimate_home_load_kw(self) -> float:
-        house_load_w, _attrs = _estimate_house_demand_w(self.hass, self.coordinator)
-        return house_load_w / 1000
-
-    def _load_solcast_forecasts(self) -> list[dict[str, Any]]:
-        self._schedule_solcast_forecast_refresh()
-        return self._forecast_cache
-
-    def _schedule_solcast_forecast_refresh(self) -> None:
-        now = datetime.now(UTC)
-        if self._forecast_cache_refreshing:
-            return
-        if (
-            self._forecast_cache_loaded_at is not None
-            and now - self._forecast_cache_loaded_at < _SOLCAST_FILE_REFRESH_INTERVAL
-        ):
-            return
-        self._forecast_cache_refreshing = True
-        self.hass.async_create_task(self._async_refresh_solcast_forecasts())
-
-    async def _async_refresh_solcast_forecasts(self) -> None:
-        paths = [self.hass.config.path(relative_path) for relative_path in _SOLCAST_DETAILED_FORECAST_PATHS]
-        try:
-            result = await self.hass.async_add_executor_job(
-                _read_solcast_forecast_file,
-                paths,
-                self._forecast_cache_path,
-                self._forecast_cache_mtime,
-            )
-            self._forecast_cache_loaded_at = datetime.now(UTC)
-            if result is not None:
-                path, mtime, forecasts = result
-                self._forecast_cache_path = path
-                self._forecast_cache_mtime = mtime
-                if forecasts:
-                    self._forecast_cache = forecasts
-        finally:
-            self._forecast_cache_refreshing = False
-
-    def _combine_solcast_site_forecasts(self, data: dict[str, Any]) -> list[dict[str, Any]]:
-        siteinfo = data.get("siteinfo")
-        if not isinstance(siteinfo, dict):
-            return []
-
-        combined: dict[str, float] = {}
-        for site in siteinfo.values():
-            if not isinstance(site, dict):
-                continue
-            forecasts = site.get("forecasts")
-            if not isinstance(forecasts, list):
-                continue
-            for item in forecasts:
-                if not isinstance(item, dict):
-                    continue
-                period_start = item.get("period_start")
-                forecast_kw = self._as_float(item.get("pv_estimate"), 0.0)
-                if period_start:
-                    combined[str(period_start)] = combined.get(str(period_start), 0.0) + forecast_kw
-
-        return [
-            {"period_start": period_start, "pv_estimate": forecast_kw}
-            for period_start, forecast_kw in sorted(combined.items())
-        ]
-
-    def _state_energy_kwh(self, entity_id: str) -> float | None:
-        value = self._state_float(entity_id)
-        if value is None:
-            return None
-        state = self.hass.states.get(entity_id)
-        unit = (state.attributes.get("unit_of_measurement") if state else "") or ""
-        if unit.lower() == "wh":
-            return value / 1000
-        return value
-
-    def _state_power_kw(self, entity_id: str) -> float | None:
-        value = self._state_float(entity_id)
-        if value is None:
-            return None
-        state = self.hass.states.get(entity_id)
-        unit = (state.attributes.get("unit_of_measurement") if state else "") or ""
-        if unit.lower() == "kw":
-            return value
-        return value / 1000
-
-    def _state_float(self, entity_id: str, default: float | None = None) -> float | None:
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return default
-        return self._as_float(state.state, default)
-
-    @staticmethod
-    def _as_float(value: Any, default: float | None = None) -> float | None:
-        try:
-            if value is None:
-                return default
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    @staticmethod
-    def _parse_datetime(value: Any) -> datetime | None:
-        if not value:
-            return None
-        try:
-            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
-
-    @staticmethod
-    def _format_duration(delta: timedelta) -> str:
-        total_minutes = max(0, int(round(delta.total_seconds() / 60)))
-        days, remainder = divmod(total_minutes, 24 * 60)
-        hours, minutes = divmod(remainder, 60)
-
-        if days:
-            return f"{days}d {hours}h"
-        if hours:
-            return f"{hours}h {minutes}m"
-        return f"{minutes}m"
-
-
-class AeccWillFillTodaySensor(AeccEstimatedChargeTimeSensor):
-    """Whether the battery is likely to reach 100% from today's solar forecast."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Will Fill Today"
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator, config_entry)
-        self._attr_unique_id = f"{config_entry.entry_id}_will_fill_today"
-
-    @property
-    def icon(self) -> str:
-        state = self._last_attributes.get("status")
-        if state in ("full", "yes"):
-            return "mdi:battery-check"
-        if state == "maybe":
-            return "mdi:battery-clock"
-        return "mdi:battery-alert"
-
-    @property
-    def native_value(self) -> str:
-        state, attrs = self._calculate_fill_today()
-        self._last_attributes = attrs
-        return state
-
-    def _calculate_fill_today(self) -> tuple[str, dict[str, Any]]:
-        now = datetime.now(UTC)
-        local_now = datetime.now().astimezone()
-        local_tomorrow = (local_now + timedelta(days=1)).replace(
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        end_today = local_tomorrow.astimezone(UTC)
-
-        soc = self._as_float(self.coordinator.get_value("battery_soc"))
-        capacity_kwh = self._as_float(getattr(self.coordinator, "battery_capacity_kwh", 0.0), 0.0)
-        attrs: dict[str, Any] = {
-            "calculated_at": now.isoformat(),
-            "forecast_until": end_today.isoformat(),
-            "target_soc": _FULL_SOC,
-            "battery_capacity_kwh": round(capacity_kwh, 3),
-        }
-
-        if soc is None or capacity_kwh <= 0:
-            attrs["status"] = "missing_data"
-            attrs["reason"] = "Battery SOC or capacity is unavailable"
-            return "Unknown", attrs
-
-        energy_needed_kwh = capacity_kwh * max(0.0, _FULL_SOC - soc) / 100.0
-        home_load_w, house_attrs = _estimate_house_demand_w(self.hass, self.coordinator)
-        home_load_kw = home_load_w / 1000
-        attrs.update(
-            {
-                "current_soc": round(soc, 1),
-                "energy_needed_kwh": round(energy_needed_kwh, 2),
-                "estimated_house_demand_w": round(home_load_w, 1),
-                "house_demand": house_attrs,
-            }
-        )
-
-        if energy_needed_kwh <= 0.05:
-            attrs["status"] = "full"
-            attrs["shortfall_kwh"] = 0
-            return "Full", attrs
-
-        forecast = self._solar_surplus_until(now, end_today, home_load_kw, energy_needed_kwh)
-        attrs.update(forecast)
-
-        usable_kwh = forecast.get("usable_forecast_kwh")
-        raw_kwh = forecast.get("raw_forecast_kwh")
-        if usable_kwh is None:
-            attrs["status"] = "missing_data"
-            return "Unknown", attrs
-
-        shortfall_kwh = max(0.0, energy_needed_kwh - float(usable_kwh))
-        attrs["shortfall_kwh"] = round(shortfall_kwh, 2)
-
-        if shortfall_kwh <= 0:
-            attrs["status"] = "yes"
-            return "Yes", attrs
-
-        if raw_kwh is not None and float(raw_kwh) >= energy_needed_kwh:
-            attrs["status"] = "maybe"
-            return "Maybe", attrs
-
-        attrs["status"] = "no"
-        return "No", attrs
-
-    def _solar_surplus_until(
-        self,
-        now: datetime,
-        deadline: datetime,
-        home_load_kw: float,
-        target_kwh: float,
-    ) -> dict[str, Any]:
-        forecasts = self._load_solcast_forecasts()
-        if not forecasts:
-            remaining_today_kwh = self._state_energy_kwh(_SOLCAST_REMAINING_TODAY_ENTITY)
-            return {
-                "solar_forecast_source": "Solcast remaining today sensor",
-                "raw_forecast_kwh": remaining_today_kwh,
-                "usable_forecast_kwh": remaining_today_kwh,
-                "method": "remaining_today_sensor_no_timing",
-            }
-
-        raw_forecast_kwh = 0.0
-        usable_forecast_kwh = 0.0
-        estimated_full_at: str | None = None
-
-        for item in forecasts:
-            period_start = self._parse_datetime(item.get("period_start"))
-            forecast_kw = self._as_float(item.get("pv_estimate"), 0.0)
-            if period_start is None or forecast_kw <= 0:
-                continue
-
-            period_end = period_start + _FORECAST_PERIOD
-            if period_end <= now or period_start >= deadline:
-                continue
-
-            start = max(period_start, now)
-            end = min(period_end, deadline)
-            hours = (end - start).total_seconds() / 3600
-            if hours <= 0:
-                continue
-
-            raw_forecast_kwh += forecast_kw * hours
-            net_charge_kw = max(0.0, forecast_kw - home_load_kw)
-            segment_kwh = net_charge_kw * hours
-
-            if estimated_full_at is None and net_charge_kw > 0 and usable_forecast_kwh + segment_kwh >= target_kwh:
-                remaining_in_segment_kwh = target_kwh - usable_forecast_kwh
-                eta = start + timedelta(hours=remaining_in_segment_kwh / net_charge_kw)
-                estimated_full_at = eta.isoformat()
-
-            usable_forecast_kwh += segment_kwh
-
-        return {
-            "solar_forecast_source": "Solcast detailed forecast file",
-            "solar_forecast_path": self._forecast_cache_path,
-            "raw_forecast_kwh": round(raw_forecast_kwh, 2),
-            "usable_forecast_kwh": round(usable_forecast_kwh, 2),
-            "estimated_full_at": estimated_full_at,
-            "method": "forecast_until_midnight_minus_current_house_demand",
-        }
-
-
 class AeccRuntimeAtCurrentHouseDemandSensor(
     AeccRecorderLeanMixin,
     CoordinatorEntity[AeccBatteryCoordinator],
@@ -2518,6 +2030,23 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                 average_window_energy_kwh = (
                     total_watt_seconds / max(total_history_weight, 1.0) / 3_600_000
                 )
+                profile_floor_applied = False
+                profile_floor_scale = 1.0
+                profile_floor_kwh: float | None = None
+                occupancy_state = self.hass.states.get(_HOUSE_OCCUPANCY_ENTITY)
+                house_empty, _occupants = _house_empty_from_state(
+                    occupancy_state.state if occupancy_state is not None else None
+                )
+                if house_empty is False and 0 < average_window_energy_kwh < _OCCUPIED_DAILY_DEMAND_FLOOR_KWH:
+                    profile_floor_kwh = _OCCUPIED_DAILY_DEMAND_FLOOR_KWH
+                    profile_floor_scale = profile_floor_kwh / average_window_energy_kwh
+                    for bucket in profile_totals.values():
+                        bucket["watt_seconds"] *= profile_floor_scale
+                    total_watt_seconds *= profile_floor_scale
+                    average_w *= profile_floor_scale
+                    average_window_energy_kwh = profile_floor_kwh
+                    profile_floor_applied = True
+
                 demand_profile = self._profile_from_bucket_totals(profile_totals)
                 self._recorder_average_demand_w = average_w
                 self._recorder_demand_profile = demand_profile
@@ -2550,6 +2079,16 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
                     "recorder_history_skipped_away_days": skipped_away_days,
                     "recorder_history_demand_w": round(average_w, 1),
                     "recorder_history_energy_kwh": round(average_window_energy_kwh, 3),
+                    "recorder_history_floor_applied": profile_floor_applied,
+                    "recorder_history_floor_kwh": (
+                        round(profile_floor_kwh, 3) if profile_floor_kwh is not None else None
+                    ),
+                    "recorder_history_floor_scale": round(profile_floor_scale, 3),
+                    "recorder_history_floor_reason": (
+                        "occupied_house_profile_below_daily_floor_after_low_usage_period"
+                        if profile_floor_applied
+                        else None
+                    ),
                     "recorder_history_profile_buckets": len(demand_profile),
                     "recorder_history_recent_morning_days": len(self._recorder_recent_morning_days),
                     "recorder_history_last_refresh": refreshed_at.isoformat(),
@@ -3399,13 +2938,13 @@ class AeccRuntimeAtCurrentHouseDemandSensor(
             attrs["status"] = "estimated"
             attrs["hours_to_reserve"] = round(runtime.total_seconds() / 3600, 2)
             attrs["estimated_reserve_at"] = (now + runtime).isoformat()
-            return AeccEstimatedChargeTimeSensor._format_duration(runtime), attrs
+            return _format_duration(runtime), attrs
 
         runtime = timedelta(hours=usable_energy_kwh / (house_demand_w / 1000))
         attrs["status"] = "estimated"
         attrs["hours_to_reserve"] = round(runtime.total_seconds() / 3600, 2)
         attrs["estimated_reserve_at"] = (now + runtime).isoformat()
-        return AeccEstimatedChargeTimeSensor._format_duration(runtime), attrs
+        return _format_duration(runtime), attrs
 
 
 class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, RestoreEntity):
@@ -3541,7 +3080,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         buffer_kwh = capacity_kwh * buffer_soc / 100
         reserve_kwh = capacity_kwh * reserve_soc / 100
         usable_capacity_kwh = capacity_kwh * max(0.0, _FULL_SOC - reserve_soc) / 100
-        adaptive_target_adjustment_soc = max(
+        requested_adaptive_target_adjustment_soc = max(
             -5.0,
             min(
                 5.0,
@@ -3551,6 +3090,15 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                 )
                 or 0.0,
             ),
+        )
+        protect_solar_handover_buffer = bool(
+            projection.get("useful_solar_start_at")
+        )
+        adaptive_target_adjustment_soc = (
+            _effective_adaptive_target_adjustment_soc(
+                requested_adaptive_target_adjustment_soc,
+                protect_solar_handover_buffer,
+            )
         )
         adaptive_target_adjustment_kwh = capacity_kwh * adaptive_target_adjustment_soc / 100
         base_required_ac_kwh = max(0.0, float(projection["required_start_energy_kwh"]))
@@ -3576,12 +3124,15 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         required_battery_kwh = required_ac_kwh / _OVERNIGHT_DISCHARGE_EFFICIENCY
         loss_allowance_kwh = max(0.0, required_battery_kwh - required_ac_kwh)
         confidence_adjustment_kwh = capacity_kwh * confidence_adjustment_soc / 100
-        required_usable_kwh = max(
-            0.0,
-            required_battery_kwh
-            + buffer_kwh
-            + confidence_adjustment_kwh
-            + adaptive_target_adjustment_kwh,
+        required_usable_kwh = _compose_required_usable_energy_kwh(
+            required_battery_kwh,
+            buffer_kwh,
+            confidence_adjustment_kwh,
+            adaptive_target_adjustment_kwh,
+        )
+        planned_handover_floor_soc = _planned_handover_floor_soc(
+            reserve_soc,
+            buffer_attrs["configured_buffer_soc"],
         )
         uncovered_shortfall_kwh = max(0.0, required_usable_kwh - usable_capacity_kwh)
         required_usable_kwh = min(required_usable_kwh, usable_capacity_kwh)
@@ -3640,10 +3191,30 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                 **target_breakdown_attrs,
                 "reserve_energy_kwh": round(reserve_kwh, 3),
                 "buffer_energy_kwh": round(buffer_kwh, 3),
+                "planned_useful_solar_handover_floor_soc": round(
+                    planned_handover_floor_soc,
+                    1,
+                ),
+                "planned_useful_solar_handover_floor_basis": (
+                    "reserve_soc_plus_configured_safety_buffer"
+                ),
                 "confidence_adjustment_energy_kwh": round(confidence_adjustment_kwh, 3),
                 "adaptive_overnight_target_adjustment_soc": round(
                     adaptive_target_adjustment_soc,
                     1,
+                ),
+                "adaptive_overnight_target_requested_adjustment_soc": round(
+                    requested_adaptive_target_adjustment_soc,
+                    1,
+                ),
+                "adaptive_overnight_target_downward_adjustment_suppressed": bool(
+                    protect_solar_handover_buffer
+                    and requested_adaptive_target_adjustment_soc < 0
+                ),
+                "adaptive_overnight_target_adjustment_policy": (
+                    "no_downward_adjustment_on_solar_handover_days"
+                    if protect_solar_handover_buffer
+                    else "whole_day_adaptive_adjustment"
                 ),
                 "adaptive_overnight_target_adjustment_energy_kwh": round(
                     adaptive_target_adjustment_kwh,
@@ -3685,7 +3256,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                 **jump_attrs,
                 "note": (
                     f"Recommendation covers the peak-rate window after {off_peak_end}, subtracts expected solar "
-                    "by forecast period, uses confidence and stale-data guards, and allows for battery losses."
+                    "by forecast period, protects the configured handover buffer, uses confidence and stale-data "
+                    "guards, and allows for battery losses."
                 ),
             }
         )
@@ -3760,7 +3332,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             ),
         )
         buffer_soc = configured_buffer_soc
-        reasons = ["user_configured_base"]
+        reasons = ["user_configured_handover_safety_buffer"]
 
         valid_days = int(_as_float(recorder_history_attrs.get("recorder_history_valid_days"), 0) or 0)
         history_status = str(recorder_history_attrs.get("recorder_history_status", "unknown"))
@@ -3791,6 +3363,9 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         buffer_soc = min(_OVERNIGHT_MAX_BUFFER_SOC, max(0.0, buffer_soc))
         return buffer_soc, {
             "configured_buffer_soc": configured_buffer_soc,
+            "configured_buffer_semantics": (
+                "protected_soc_headroom_at_useful_solar_handover"
+            ),
             "automatic_buffer_adjustment_soc": round(
                 max(0.0, buffer_soc - configured_buffer_soc),
                 1,
@@ -4017,6 +3592,14 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "projected_house_demand_kwh": round(projected_house_kwh, 3),
             "projected_solar_kwh": round(projected_solar_kwh, 3),
             "configured_buffer_soc": buffer_attrs.get("configured_buffer_soc"),
+            "planned_useful_solar_handover_floor_soc": round(
+                _planned_handover_floor_soc(
+                    reserve_soc,
+                    _as_float(buffer_attrs.get("configured_buffer_soc"), 0.0)
+                    or 0.0,
+                ),
+                1,
+            ),
             "automatic_buffer_adjustment_soc": buffer_attrs.get(
                 "automatic_buffer_adjustment_soc"
             ),
@@ -4235,7 +3818,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         net_meter_kwh: float | None = None
         if house_daily_kwh is not None and house_daily_kwh > 0:
             if daily_source == "legacy_external_house_demand_daily":
-                ac_daily_kwh = self._state_energy_kwh(_AC_CHARGING_DAILY_ENTITY) or 0.0
+                ac_daily_kwh = self._state_energy_kwh(_LEGACY_AC_CHARGING_DAILY_ENTITY) or 0.0
                 net_meter_kwh = max(0.0, house_daily_kwh - ac_daily_kwh)
             else:
                 net_meter_kwh = house_daily_kwh
@@ -4283,7 +3866,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             DOMAIN,
             f"{self._config_entry.entry_id}_house_demand_daily",
         )
-        return entity_id or _HOUSE_DEMAND_DAILY_ENTITY
+        return entity_id or _HOUSE_DEMAND_DAILY_ENTITY_FALLBACK
 
     def _away_mode_active(self) -> bool:
         house_empty, _occupants = self._house_empty_state()
@@ -4839,7 +4422,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
     ) -> list[tuple[datetime, datetime, float]]:
         periods: list[tuple[datetime, datetime, float]] = []
         for item in forecasts:
-            period_start = AeccEstimatedChargeTimeSensor._parse_datetime(item.get("period_start"))
+            period_start = _parse_datetime(item.get("period_start"))
             forecast_kw = _as_float(item.get("pv_estimate"), 0.0) or 0.0
             if period_start is None or forecast_kw <= 0:
                 continue
@@ -4898,32 +4481,6 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                     self._forecast_cache = forecasts
         finally:
             self._forecast_cache_refreshing = False
-
-    @staticmethod
-    def _combine_solcast_site_forecasts(data: dict[str, Any]) -> list[dict[str, Any]]:
-        siteinfo = data.get("siteinfo")
-        if not isinstance(siteinfo, dict):
-            return []
-
-        combined: dict[str, float] = {}
-        for site in siteinfo.values():
-            if not isinstance(site, dict):
-                continue
-            forecasts = site.get("forecasts")
-            if not isinstance(forecasts, list):
-                continue
-            for item in forecasts:
-                if not isinstance(item, dict):
-                    continue
-                period_start = item.get("period_start")
-                forecast_kw = _as_float(item.get("pv_estimate"), 0.0) or 0.0
-                if period_start:
-                    combined[str(period_start)] = combined.get(str(period_start), 0.0) + forecast_kw
-
-        return [
-            {"period_start": period_start, "pv_estimate": forecast_kw}
-            for period_start, forecast_kw in sorted(combined.items())
-        ]
 
     def _state_energy_kwh(self, entity_id: str) -> float | None:
         value = _state_float(self.hass, entity_id)

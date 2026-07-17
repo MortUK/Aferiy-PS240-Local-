@@ -79,7 +79,7 @@ def clean_soc(ctx: CleanerContext) -> float | None:
     if ctx.last_accepted_value is not None and ctx.last_accepted_at is not None and ctx.now > ctx.last_accepted_at:
         elapsed_seconds = ctx.now - ctx.last_accepted_at
         # Skip the rate check for sub-poll-interval calls. Multiple sensor
-        # entities (e.g. AeccBatteryPowerSensor) call get_value several
+        # entities may call get_value several
         # times per coordinator update and the second call would otherwise
         # see "huge" pp/min from the microsecond gap. Real polls are ≥ 2s
         # apart per MIN_POLL_INTERVAL, so a 1-second floor is safe.

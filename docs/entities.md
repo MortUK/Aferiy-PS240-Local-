@@ -19,9 +19,15 @@ Core entities focus on data and controls that come directly from the local batte
 - Battery Status
 - Connection Status
 
+Charge Power can be selected from `200 W` to `1200 W` per unit in `100 W`
+steps. New installations start at `800 W`. Discharge Power remains limited to
+`800 W`–`1200 W` per unit.
+
 Individual Battery N SOC entities are created from local `Storage_list` entries
 reported by the master. Restart Home Assistant or reload the integration after
-adding, removing, or replacing a battery/inverter so the entity list is rebuilt.
+adding or replacing a battery/inverter so new entity slots are created. Removed
+higher-numbered slots are cleaned up only after the master has reported the same
+smaller topology for several consecutive successful polls.
 
 `Operating Mode` is the last mode commanded through this local
 integration. If the AEC Cloud app changes the system, the selector may not
@@ -42,36 +48,12 @@ Diagnostic entities are intended for troubleshooting rather than dashboards:
 - Consecutive Poll Failures
 - Last Command Result
 - Firmware Version
-- SMART Overnight Accuracy
-- SMART Morning Accuracy
 - Selected raw or derived diagnostic readings
-
-`SMART Overnight Accuracy` reviews the last completed SMART overnight cycle.
-On solar-shortfall days, its signed percentage shows how much SOC was left
-above or below the planned reserve floor when the next off-peak window started.
-A positive value means the target was probably higher than needed; a negative
-value means it was too low. Solar-surplus days are reported as `0` and marked
-`not_scored_solar_surplus`, because solar refill makes end-of-day spare SOC a
-poor measure of the overnight calculation. If the battery started the cheap-rate
-window above the SMART target and never reached the target line, positive spare
-SOC is also reported as `0` and marked `not_scored_started_above_target`; that is
-carry-in energy, not an overcharge error. The same sensor also includes
-`morning_need_accuracy` attributes showing how close the battery came to the
-planned reserve floor before useful solar took over.
-
-`SMART Morning Accuracy` exposes that morning bridge result as a graphable
-signed percentage. A positive value means the battery stayed above the planned
-reserve floor before useful solar took over; a negative value means it dipped
-below the planned reserve. Carry-in nights that stayed above target and did not
-need charging are reported as `0` with the same `not_scored_started_above_target`
-result.
 
 ## Energy Estimate Sensors
 
 - Battery Capacity, selected in 1.958 kWh module steps
 - Estimated House Demand
-- Estimated Charge Time
-- Will Fill Today
 - Recommended Overnight SOC
 
 Estimated House Demand includes the AFERIY PV reading plus any additional live
@@ -99,9 +81,19 @@ The calculation can use:
 - The expected Post-Sunset Need after useful solar falls away and before off-peak starts
 - Home occupancy from `zone.home`, so empty-house days can be treated separately from normal household demand
 - Battery discharge and grid charge efficiency allowances
-- A dynamic buffer and confidence adjustment that increase when forecast or demand history is less certain
+- A protected Overnight Safety Buffer, plus automatic safeguards that increase
+  when forecast or demand history is less certain
 
-Pre-Sunrise Need is the estimated energy needed after the cheap-rate window ends and before sustained forecast solar should cover house demand. Weak early-morning forecast solar is only given partial credit until sustained useful solar is expected. If the forecast never reaches sustained useful solar, part of the day forecast is still credited so low winter solar can reduce the target instead of forcing 100%. If Solar Availability is set to Solar Unavailable, the calculation treats forecast solar as 0 kWh and reports Batteries Only. The recommended target percentage is calculated from that kWh need, the configured battery capacity, the wider peak-rate window, recent use, expected solar, efficiency losses, a dynamic buffer, and a confidence adjustment. It is then kept within practical SOC limits.
+Pre-Sunrise Need is the estimated energy needed after the cheap-rate window ends and before sustained forecast solar should cover house demand. Weak early-morning forecast solar is only given partial credit until sustained useful solar is expected. If the forecast never reaches sustained useful solar, part of the day forecast is still credited so low winter solar can reduce the target instead of forcing 100%. If Solar Availability is set to Solar Unavailable, the calculation treats forecast solar as 0 kWh and reports Batteries Only. The recommended target percentage is calculated from that kWh need, the configured battery capacity, the wider peak-rate window, recent use, expected solar, efficiency losses, automatic safeguards, and a confidence adjustment. It is then kept within practical SOC limits.
+
+`Overnight Safety Buffer` is protected SOC headroom above the battery reserve at
+the point useful solar is expected to take over. With a `10%` reserve and a `3%`
+buffer, the modeled handover floor is therefore `13%`. Learned morning demand,
+including recurring air-conditioning use, is the energy expected to be consumed
+before that handover; it does not replace the safety buffer. Negative adaptive
+corrections may reduce the predicted-demand component, but cannot consume the
+configured buffer. Forecast-confidence and stale-data safeguards remain
+separate.
 
 Useful attributes include `target_breakdown_summary`, `recommendation_reason`, `pre_sunrise_need_kwh`, `post_sunset_need_kwh`, `whole_day_net_shortfall_kwh`, `pre_sunrise_net_need_kwh`, `pre_sunrise_credited_solar_kwh`, `no_useful_solar_forecast`, `solar_credit_mode`, `solar_unavailable_override`, `solar_override_status`, `solar_break_even_at`, `recorder_history_weighting`, `recorder_history_daily_averages`, `forecast_confidence`, `stale_data_guard_active`, `dynamic_buffer_soc`, `battery_loss_allowance_kwh`, `estimated_grid_charge_energy_to_target_kwh`, and `target_jump_guard`.
 
@@ -127,7 +119,8 @@ Assistant and uses the proven local controls:
 
 - Start local Charge one minute after the configured off-peak start time.
 - Use System Average Battery SOC as the target feedback.
-- Idle or hold when the target is reached.
+- Leave the confirmed charge-to-target command latched so the battery BMS can
+  hold the target without repeated Charge/Idle switching.
 - Restore Self-Gen/Zero Export five minutes before the off-peak end time.
 
 This avoids relying on the cloud scheduler and keeps the local integration's

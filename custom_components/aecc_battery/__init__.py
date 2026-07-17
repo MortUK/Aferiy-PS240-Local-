@@ -60,63 +60,6 @@ EXPORT_SNAPSHOT_END_REGISTER = 3130
 FRONTEND_PATH = Path(__file__).parent / "frontend"
 FRONTEND_URL = "/aecc_battery_static"
 
-POWER_FLOW_ENTITY_IDS = (
-    "sensor.aecc_battery_system_average_battery_soc",
-    "sensor.aecc_battery_pv_power",
-    "sensor.aecc_battery_ac_charging_power",
-    "sensor.aecc_battery_total_charge_power",
-    "sensor.aecc_battery_total_battery_output_power",
-    "sensor.aecc_battery_grid_meter_power",
-    "sensor.aecc_battery_grid_export_power",
-    "sensor.aecc_battery_total_grid_output_power",
-    "sensor.aecc_battery_battery_status",
-    "sensor.aecc_battery_estimated_house_demand",
-    "sensor.aecc_battery_house_demand_energy",
-    "sensor.aecc_battery_house_demand_daily",
-    "sensor.aecc_battery_recommended_overnight_soc",
-    "sensor.aecc_battery_automatic_overnight_charging_status",
-    "select.aecc_battery_operating_mode",
-    "select.aecc_battery_battery_capacity_preset",
-    "select.aecc_battery_automatic_overnight_charging",
-    "select.aecc_battery_smart_tariff_preset",
-    "number.aecc_battery_charge_power_target",
-    "number.aecc_battery_discharge_power_target",
-    "number.aecc_battery_manual_overnight_charge_target",
-    "time.aecc_battery_smart_off_peak_start",
-    "time.aecc_battery_smart_off_peak_end",
-    "number.aecc_battery_charge_limit",
-    "number.aecc_battery_discharge_limit",
-    "sensor.shelly_grid_import_power",
-    "sensor.shelly_grid_export_power",
-    "sensor.shellypro3em_841fe8916604_phase_a_power",
-    "sensor.aferiy_actual_system_mode",
-    "sensor.aferiy_actual_energy_mode",
-    "sensor.aferiy_actual_power_mode",
-    "sensor.aferiy_actual_ai_mode",
-    "sensor.aferiy_actual_bat_basic_discharge_power",
-    "sensor.aferiy_zero_feed_in",
-    "sensor.aferiy_generation_self_consumption",
-    "select.aecc_battery_solar_availability",
-)
-
-POWER_FLOW_DYNAMIC_SENSOR_SUFFIXES = (
-    "_battery_1_soc",
-    "_battery_2_soc",
-    "_battery_3_soc",
-    "_battery_4_soc",
-    "_battery_5_soc",
-    "_battery_6_soc",
-    "_battery_7_soc",
-    "_battery_8_soc",
-    "_battery_9_soc",
-    "_battery_10_soc",
-    "_battery_11_soc",
-    "_battery_12_soc",
-    "_battery_13_soc",
-    "_battery_14_soc",
-    "_battery_15_soc",
-)
-
 OLD_ARRAY_SOC_UNIQUE_SUFFIXES = (
     "array_1_battery_soc",
     "array_2_battery_soc",
@@ -266,6 +209,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _async_remove_withdrawn_config_entities(hass, entry)
     _async_remove_disabled_advanced_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(
+        coordinator.async_add_listener(
+            lambda: _async_remove_stale_battery_soc_entities(hass, entry, coordinator)
+        )
+    )
     _async_remove_empty_legacy_ip_device(hass, entry, coordinator)
     _async_register_services(hass)
 
@@ -366,26 +314,35 @@ def _async_remove_stale_battery_soc_entities(
     entry: ConfigEntry,
     coordinator: AeccBatteryCoordinator,
 ) -> None:
-    """Keep Battery N SOC slots even when a setup snapshot is incomplete."""
-    reported_slots = {
-        index + 1
-        for index, storage_entry in enumerate(coordinator.storage_entries)
-        if storage_entry.get("BatterySoc") is not None
-    }
-    if not reported_slots:
-        _LOGGER.warning(
-            "AECC Battery '%s' did not report any Storage_list BatterySoc entries; "
-            "keeping existing Battery N SOC entities",
+    """Remove stale Battery N entities only after topology is confirmed."""
+    confirmed_slots = coordinator.confirmed_storage_slot_count
+    if confirmed_slots <= 0:
+        _LOGGER.debug(
+            "AECC Battery '%s' topology is not confirmed; keeping existing Battery N SOC entities",
             coordinator.device_name,
         )
         return
 
-    _LOGGER.debug(
-        "AECC Battery '%s' reported Battery SOC slots %s; keeping existing "
-        "Battery N SOC entities because local Storage_list snapshots can be partial",
-        coordinator.device_name,
-        sorted(reported_slots),
-    )
+    registry = er.async_get(hass)
+    removed: list[str] = []
+    for slot in range(confirmed_slots + 1, 16):
+        entity_id = registry.async_get_entity_id(
+            Platform.SENSOR,
+            DOMAIN,
+            f"{entry.entry_id}_battery_{slot}_soc",
+        )
+        if entity_id is None:
+            continue
+        registry.async_remove(entity_id)
+        removed.append(entity_id)
+
+    if removed:
+        _LOGGER.info(
+            "AECC Battery '%s' confirmed %d battery slots; removed stale entities: %s",
+            coordinator.device_name,
+            confirmed_slots,
+            ", ".join(removed),
+        )
 
 
 def _async_remove_withdrawn_config_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -657,20 +614,22 @@ def _async_register_services(hass: HomeAssistant) -> None:
         label = str(call.data.get("label") or "manual").strip() or "manual"
         captured_at = datetime.now(UTC).isoformat()
         entities: dict[str, dict[str, Any]] = {}
-        missing_entities: list[str] = []
-        entity_ids = list(POWER_FLOW_ENTITY_IDS)
-        for state in hass.states.async_all("sensor"):
-            if state.entity_id in entity_ids:
-                continue
-            if state.entity_id.startswith("sensor.aecc_battery") and state.entity_id.endswith(
-                POWER_FLOW_DYNAMIC_SENSOR_SUFFIXES
-            ):
-                entity_ids.append(state.entity_id)
+        registry = er.async_get(hass)
+        active_entry_ids = {
+            entry_id
+            for entry_id, value in (hass.data.get(DOMAIN) or {}).items()
+            if isinstance(value, AeccBatteryCoordinator)
+        }
+        entity_ids = sorted(
+            registry_entry.entity_id
+            for registry_entry in registry.entities.values()
+            if registry_entry.platform == DOMAIN
+            and registry_entry.config_entry_id in active_entry_ids
+        )
 
         for entity_id in entity_ids:
             state = hass.states.get(entity_id)
             if state is None:
-                missing_entities.append(entity_id)
                 continue
 
             attrs = {
@@ -692,17 +651,15 @@ def _async_register_services(hass: HomeAssistant) -> None:
                 "label": label,
                 "captured_at": captured_at,
                 "entity_count": len(entities),
-                "missing_count": len(missing_entities),
-                "missing_entities": missing_entities,
+                "source": "AECC entity registry entries",
                 "entities": entities,
             },
         )
 
         _LOGGER.info(
-            "AECC power flow snapshot %r captured; %d entities present, %d missing",
+            "AECC power flow snapshot %r captured; %d registered entities present",
             label,
             len(entities),
-            len(missing_entities),
         )
 
     async def async_restore_original_self_consumption(call: ServiceCall) -> None:

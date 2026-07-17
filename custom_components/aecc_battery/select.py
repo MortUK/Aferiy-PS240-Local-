@@ -17,22 +17,21 @@ from .const import (
     BATTERY_CAPACITY_PRESET_MODULE_COUNTS,
     CONF_ADVANCED_ENERGY_SENSORS,
     DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_CHARGE_POWER_W,
     DEFAULT_OFF_PEAK_END,
     DEFAULT_OFF_PEAK_START,
     DEFAULT_TARIFF_PRESET,
     DOMAIN,
-    CONF_OFF_PEAK_END,
-    CONF_OFF_PEAK_START,
     CONF_TARIFF_PRESET,
     MODE_CUSTOM,
     MODE_SELF_CONSUMPTION,
     MAX_REGISTER_POWER_DEFAULT,
+    MIN_CHARGE_POWER_W,
     OVERNIGHT_CHARGE_MODE_FROM_LABEL,
     OVERNIGHT_CHARGE_MODE_LABELS,
     OVERNIGHT_CHARGE_MODE_DISABLED,
     TARIFF_PRESET_LABELS,
     TARIFF_PRESETS,
-    WORK_MODES,
     battery_capacity_for_modules,
     battery_capacity_preset_label,
 )
@@ -42,7 +41,6 @@ _LOGGER = logging.getLogger(__name__)
 
 OPERATING_MODE_SELF_GEN = "Self-Gen/Zero Export"
 OPERATING_MODE_OPTIONS = [OPERATING_MODE_SELF_GEN, "Idle", "Charge", "Discharge", "Feed"]
-DIRECTION_OPTIONS = ["Charge", "Discharge", "Idle"]
 CAPACITY_PRESET_OPTIONS = [
     battery_capacity_preset_label(module_count)
     for module_count in BATTERY_CAPACITY_PRESET_MODULE_COUNTS
@@ -203,8 +201,15 @@ class AeccOperatingModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectE
             return
 
         if option == "Charge":
-            power = int(getattr(self.coordinator, "commanded_charge_power", 800) or 800)
-            power = _clamp(power, 400, 1200)
+            power = int(
+                getattr(
+                    self.coordinator,
+                    "commanded_charge_power",
+                    DEFAULT_CHARGE_POWER_W,
+                )
+                or DEFAULT_CHARGE_POWER_W
+            )
+            power = _clamp(power, MIN_CHARGE_POWER_W, 1200)
 
             success = await self.coordinator.async_set_battery_control("Charge", power)
             if success:
@@ -634,119 +639,3 @@ class AeccSolarAvailabilitySelect(
         )
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
-
-
-class AeccWorkModeSelect(CoordinatorEntity[AeccBatteryCoordinator], SelectEntity):
-    """Raw Work Mode selector. Keep hidden from normal dashboards."""
-
-    _attr_icon = "mdi:battery-sync"
-    _attr_has_entity_name = True
-    _attr_name = "Work Mode"
-    _attr_options = WORK_MODES
-
-    def __init__(
-        self,
-        coordinator: AeccBatteryCoordinator,
-        config_entry: ConfigEntry,
-    ) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_work_mode"
-        self._current_mode: str | None = coordinator.initial_work_mode
-        if self._current_mode:
-            coordinator.commanded_work_mode = self._current_mode
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def current_option(self) -> str | None:
-        return self.coordinator.commanded_work_mode or self._current_mode
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.last_update_success
-
-    async def async_select_option(self, option: str) -> None:
-        _LOGGER.info("User selected work mode: %s", option)
-        success = await self.coordinator.async_set_work_mode(option)
-        if success:
-            self._current_mode = option
-            self.coordinator.commanded_work_mode = option
-
-            if option == MODE_SELF_CONSUMPTION:
-                self.coordinator.commanded_direction = "Idle"
-                self.coordinator.commanded_operating_mode = OPERATING_MODE_SELF_GEN
-            else:
-                self.coordinator.commanded_operating_mode = None
-
-            self.coordinator.async_set_updated_data(self.coordinator.data or {})
-            self.async_write_ha_state()
-        else:
-            _LOGGER.error("Failed to set work mode to '%s'", option)
-
-
-class AeccBatteryDirection(CoordinatorEntity[AeccBatteryCoordinator], SelectEntity):
-    """Raw Battery Direction selector. Keep hidden from normal dashboards."""
-
-    _attr_icon = "mdi:battery-charging-wireless"
-    _attr_has_entity_name = True
-    _attr_name = "Battery Direction"
-    _attr_options = DIRECTION_OPTIONS
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_battery_direction"
-
-        charge = coordinator.get_value("battery_charging_power") or 0
-        discharge = coordinator.get_value("battery_discharging_power") or 0
-
-        try:
-            if float(charge) > 0:
-                self._current_direction = "Charge"
-            elif float(discharge) > 0:
-                self._current_direction = "Discharge"
-            else:
-                self._current_direction = "Idle"
-        except (TypeError, ValueError):
-            self._current_direction = "Idle"
-
-        coordinator.commanded_direction = self._current_direction
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def current_option(self) -> str:
-        return self.coordinator.commanded_direction or self._current_direction
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.last_update_success
-
-    async def async_select_option(self, option: str) -> None:
-        _LOGGER.info("User selected raw battery direction: %s", option)
-
-        if option == "Idle":
-            power = 0
-        elif option == "Charge":
-            power = int(getattr(self.coordinator, "commanded_charge_power", 800) or 800)
-            power = _clamp(power, 400, 1200)
-        else:
-            power = int(getattr(self.coordinator, "commanded_discharge_power", 800) or 800)
-            power = _clamp(power, 800, 1200)
-
-        success = await self.coordinator.async_set_battery_control(option, power)
-        if success:
-            self._current_direction = option
-            self.coordinator.commanded_power = power
-            self.coordinator.commanded_direction = option
-            self.coordinator.commanded_work_mode = MODE_CUSTOM
-            self.coordinator.commanded_operating_mode = option
-            self.coordinator.async_set_updated_data(self.coordinator.data or {})
-            self.async_write_ha_state()
-        else:
-            _LOGGER.error("Failed to set raw battery direction to '%s'", option)

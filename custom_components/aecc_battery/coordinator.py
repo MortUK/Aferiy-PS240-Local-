@@ -18,6 +18,7 @@ from homeassistant.util import dt as dt_util
 
 from .cleaners import CLEANERS, CleanerContext
 from .const import (
+    DEFAULT_CHARGE_POWER_W,
     DEFAULT_BRAND_PROFILE,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_OFF_PEAK_END,
@@ -75,6 +76,8 @@ _ADAPTIVE_TARGET_SOC_MIN = -5.0
 _ADAPTIVE_TARGET_SOC_MAX = 5.0
 _ADAPTIVE_TARGET_SOC_STEP = 1.0
 _ADAPTIVE_TARGET_SOC_DECAY = 0.98
+_SUSPECT_FRAME_TOLERANCE = 3
+_SOC_COLLAPSE_FLOOR = 5.0
 
 # ── Unified field mapping ─────────────────────────────────────────────────────
 # Maps canonical sensor keys to (source, field_name, scale) tuples.
@@ -178,6 +181,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._consecutive_failures: int = 0
         self._last_good_data: dict[str, Any] | None = None
         self._last_good_storage_soc_count: int = 0
+        self._suspect_streak: int = 0
+        self._suspect_frames_total: int = 0
+        self._last_suspect_reason: str | None = None
+        self._last_suspect_at: str | None = None
+        self._last_suspect_outcome: str | None = None
+        self._last_suspect_accepted_at: str | None = None
+        self._suspect_storage_topology: tuple[str, ...] | None = None
+        self._last_reported_storage_topology: tuple[str, ...] = ()
+        self._storage_topology_signature: tuple[str, ...] = ()
+        self._storage_topology_stable_polls: int = 0
         self.last_successful_update: datetime | None = None
         self.last_failed_update: datetime | None = None
         self.last_failure_reason: str | None = None
@@ -202,7 +215,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._commanded_direction: str = "Idle"
         self._commanded_work_mode: str | None = None
         self.commanded_operating_mode: str | None = None
-        self.commanded_charge_power: int = 800
+        self.commanded_charge_power: int = DEFAULT_CHARGE_POWER_W
         self.commanded_discharge_power: int = 800
         self.commanded_feed_power: int = 0
         self.battery_capacity_kwh: float = DEFAULT_BATTERY_CAPACITY_KWH
@@ -347,9 +360,48 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(reason)
 
         self._consecutive_failures = 0
+
+        reported_storage_topology = tuple(self._storage_units_by_key(raw))
+        self._last_reported_storage_topology = reported_storage_topology
+        suspect_reason = self._frame_suspect_reason(raw)
+        accepted_suspect_polls = 0
+        if suspect_reason is not None:
+            if reported_storage_topology != self._suspect_storage_topology:
+                self._suspect_streak = 0
+            if self._suspect_streak < _SUSPECT_FRAME_TOLERANCE:
+                self._suspect_streak += 1
+                self._suspect_frames_total += 1
+                self._last_suspect_reason = suspect_reason
+                self._last_suspect_at = datetime.now(UTC).isoformat()
+                self._last_suspect_outcome = "held"
+                self._suspect_storage_topology = reported_storage_topology
+                _LOGGER.info(
+                    "Rejecting suspect poll frame (%s) - keeping last good data (%d/%d)",
+                    suspect_reason,
+                    self._suspect_streak,
+                    _SUSPECT_FRAME_TOLERANCE,
+                )
+                return self._last_good_data or raw
+            accepted_suspect_polls = self._suspect_streak + 1
+            self._last_suspect_outcome = "accepted_after_tolerance"
+            self._last_suspect_accepted_at = datetime.now(UTC).isoformat()
+            _LOGGER.info(
+                "Accepting changed poll frame (%s) after %d consecutive suspect polls",
+                suspect_reason,
+                self._suspect_streak,
+            )
+        elif self._suspect_streak:
+            self._last_suspect_outcome = "cleared_by_healthy_frame"
+
+        self._suspect_streak = 0
+        self._suspect_storage_topology = None
         self.last_successful_update = datetime.now(UTC)
         self.last_failure_reason = None
         self._last_good_storage_soc_count = self._storage_soc_count(raw)
+        self._update_storage_topology_confirmation(
+            raw,
+            observed_polls=max(1, accepted_suspect_polls),
+        )
         self._last_good_data = raw
         await self._async_maybe_refresh_device_management()
         self._schedule_overnight_evaluation()
@@ -540,12 +592,13 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return count
 
     def _storage_soc_snapshot_valid(self, data: dict[str, Any] | None) -> tuple[bool, str]:
-        """Reject partial multi-battery snapshots before they reach HA entities.
+        """Reject clearly invalid Storage_list snapshots before they reach HA.
 
-        The PS240 local TCP stream can briefly report a truncated/garbled
-        ``Storage_list`` while the cloud app remains healthy. Publishing that
-        partial list makes Battery N SOC and the system average jump to
-        impossible values, so keep the last good poll instead.
+        First-poll online 0% battery readings are not useful because there is
+        no good frame to hold. Once a good frame exists, topology changes and
+        sudden SOC collapses are handled by ``_frame_suspect_reason`` so real
+        unit removals can settle after a short tolerance instead of being
+        treated as connection failures forever.
         """
         if not isinstance(data, dict):
             return False, "poll response is not a mapping"
@@ -554,7 +607,6 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not entries:
             return True, "no Storage_list to validate"
 
-        soc_values: list[float] = []
         zero_soc_online = False
         for entry in entries:
             if not isinstance(entry, dict):
@@ -562,7 +614,6 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             soc = self._safe_float(entry.get("BatterySoc"))
             if soc is None:
                 continue
-            soc_values.append(soc)
             status = self._safe_int(
                 entry.get("status")
                 if entry.get("status") is not None
@@ -571,21 +622,153 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if soc == 0 and status != 0:
                 zero_soc_online = True
 
-        count = len(soc_values)
-        if (
-            self._last_good_storage_soc_count > 1
-            and count
-            and count < self._last_good_storage_soc_count
-        ):
-            return (
-                False,
-                f"partial Storage_list SOC snapshot ({count}/{self._last_good_storage_soc_count})",
-            )
-
-        if zero_soc_online:
-            return False, "online battery reported 0% SOC in Storage_list"
+        if zero_soc_online and self._last_good_data is None:
+            return False, "startup online battery reported 0% SOC in Storage_list"
 
         return True, "Storage_list SOC snapshot accepted"
+
+    @staticmethod
+    def _storage_unit_key(unit: dict[str, Any], fallback_index: int) -> str:
+        """Return a stable non-empty identity for one Storage_list entry."""
+        for key in ("StorageSN", "deviceSn", "DeviceSn", "DevAddr"):
+            value = str(unit.get(key) or "").strip()
+            if value:
+                return f"{key}:{value}"
+        return f"slot:{fallback_index}"
+
+    def _storage_units_by_key(self, data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Return Storage_list entries indexed by a stable identity."""
+        return {
+            self._storage_unit_key(unit, index): unit
+            for index, unit in enumerate(data.get("Storage_list") or [])
+            if isinstance(unit, dict)
+        }
+
+    def _update_storage_topology_confirmation(
+        self,
+        data: dict[str, Any],
+        observed_polls: int = 1,
+    ) -> None:
+        """Track how long the same accepted battery topology has remained stable."""
+        signature = tuple(self._storage_units_by_key(data))
+        self._last_reported_storage_topology = signature
+        if signature == self._storage_topology_signature:
+            self._storage_topology_stable_polls += max(1, observed_polls)
+            return
+        self._storage_topology_signature = signature
+        self._storage_topology_stable_polls = max(1, observed_polls)
+
+    @property
+    def storage_topology_confirmed(self) -> bool:
+        """Return whether one non-empty topology has survived several good polls."""
+        return bool(self._storage_topology_signature) and (
+            self._storage_topology_stable_polls > _SUSPECT_FRAME_TOLERANCE
+        )
+
+    @property
+    def confirmed_storage_slot_count(self) -> int:
+        """Return the confirmed number of locally reported storage slots."""
+        if not self.storage_topology_confirmed:
+            return 0
+        return len(self._storage_topology_signature)
+
+    @property
+    def diagnostic_state(self) -> dict[str, Any]:
+        """Return public live-state diagnostics without exposing internals."""
+        confirmation_required = _SUSPECT_FRAME_TOLERANCE + 1
+        return {
+            "consecutive_failures": self._consecutive_failures,
+            "suspect_frame_streak": self._suspect_streak,
+            "suspect_frames_total": self._suspect_frames_total,
+            "last_suspect_frame_reason": self._last_suspect_reason,
+            "last_suspect_frame_at": self._last_suspect_at,
+            "last_suspect_frame_outcome": self._last_suspect_outcome,
+            "last_suspect_frame_accepted_at": self._last_suspect_accepted_at,
+            "suspect_storage_topology": self._storage_topology_summary(
+                self._suspect_storage_topology or ()
+            ),
+            "storage_topology_stable_polls": self._storage_topology_stable_polls,
+            "storage_topology_confirmation_required": confirmation_required,
+            "storage_topology_confirmation_remaining": max(
+                0,
+                confirmation_required - self._storage_topology_stable_polls,
+            ),
+            "storage_topology_confirmed": self.storage_topology_confirmed,
+            "confirmed_storage_slot_count": self.confirmed_storage_slot_count,
+            "last_accepted_storage_topology": self._storage_topology_summary(
+                self._storage_topology_signature
+            ),
+            "last_reported_storage_topology": self._storage_topology_summary(
+                self._last_reported_storage_topology
+            ),
+        }
+
+    @staticmethod
+    def _storage_topology_summary(signature: tuple[str, ...]) -> dict[str, Any]:
+        """Summarise topology identities without exposing serial values."""
+        return {
+            "slot_count": len(signature),
+            "identity_sources": [key.partition(":")[0] for key in signature],
+        }
+
+    @staticmethod
+    def _storage_unit_label(unit: dict[str, Any]) -> str:
+        """Return a safe unit label for logs and diagnostics."""
+        devaddr = unit.get("DevAddr")
+        if devaddr not in (None, ""):
+            return f"DevAddr {devaddr}"
+        serial = str(
+            unit.get("StorageSN")
+            or unit.get("deviceSn")
+            or unit.get("DeviceSn")
+            or ""
+        ).strip()
+        if serial:
+            return "serial-identified unit"
+        return "unknown unit"
+
+    def _frame_suspect_reason(self, raw: dict[str, Any]) -> str | None:
+        """Detect one-off bad multi-battery frames without hiding real changes.
+
+        The PS240 can occasionally return a poll where executor batteries are
+        missing or an SOC briefly collapses to 0% while the cloud app still has
+        healthy data. Hold those frames for a few polls, then accept them if
+        they persist so replaced or removed units still update after restart.
+        """
+        if self._last_good_data is None:
+            return None
+
+        last_units = self._storage_units_by_key(self._last_good_data)
+        if not last_units:
+            return None
+
+        new_units = self._storage_units_by_key(raw)
+        if not new_units:
+            return "Storage_list is empty after previously reporting battery units"
+
+        missing = [
+            self._storage_unit_label(unit)
+            for key, unit in last_units.items()
+            if key not in new_units
+        ]
+        if missing:
+            return f"unit(s) missing from Storage_list: {', '.join(missing)}"
+
+        for key, unit in new_units.items():
+            last_unit = last_units.get(key)
+            if last_unit is None:
+                continue
+            new_soc = self._safe_float(unit.get("BatterySoc"))
+            last_soc = self._safe_float(last_unit.get("BatterySoc"))
+            if new_soc is None or last_soc is None:
+                continue
+            if new_soc == 0 and last_soc >= _SOC_COLLAPSE_FLOOR:
+                return (
+                    f"unit {self._storage_unit_label(unit)} SOC collapsed "
+                    f"from {last_soc:g} to 0"
+                )
+
+        return None
 
     def device_role_for_serial(self, serial: Any) -> str | None:
         """Return the topology role reported for a storage serial."""
@@ -1183,7 +1366,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return
 
-        power = int(getattr(self, "commanded_charge_power", 800) or 800)
+        power = int(
+            getattr(
+                self,
+                "commanded_charge_power",
+                DEFAULT_CHARGE_POWER_W,
+            )
+            or DEFAULT_CHARGE_POWER_W
+        )
         success = await self.async_set_battery_control(
             "Charge",
             power,
@@ -1210,40 +1400,6 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Charge command not confirmed",
                 "The battery did not confirm the local charge command; retrying on the next update.",
                 {**base_attrs, "charge_power_w_per_unit": power},
-            )
-
-    async def _overnight_idle_above_target(
-        self,
-        target_soc: int,
-        base_attrs: dict[str, Any],
-    ) -> None:
-        if self._overnight_last_action == "idle":
-            self._set_overnight_status(
-                "Target reached",
-                f"SOC is above {target_soc}%; holding idle until the window ends.",
-                {
-                    **base_attrs,
-                    "last_action": self._overnight_last_action,
-                    "last_action_at": self._overnight_last_action_at.isoformat(),
-                },
-            )
-            return
-
-        success = await self.async_set_battery_control("Idle", 0)
-        if success:
-            self._overnight_last_action = "idle"
-            self._overnight_last_action_at = datetime.now(UTC)
-            self.commanded_operating_mode = "Idle"
-            self._set_overnight_status(
-                "Target reached",
-                f"SOC is above {target_soc}%; holding idle until the window ends.",
-                base_attrs,
-            )
-        else:
-            self._set_overnight_status(
-                "Idle command failed",
-                "The battery did not confirm the local idle command.",
-                base_attrs,
             )
 
     async def _overnight_restore(
@@ -1375,7 +1531,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "post_sunset_need_kwh",
             "peak_window_need_kwh",
             "battery_energy_before_buffer_kwh",
+            "configured_buffer_soc",
             "dynamic_buffer_soc",
+            "planned_useful_solar_handover_floor_soc",
+            "adaptive_overnight_target_requested_adjustment_soc",
+            "adaptive_overnight_target_downward_adjustment_suppressed",
+            "adaptive_overnight_target_adjustment_policy",
             "confidence_mode",
             "estimated_grid_charge_energy_to_target_kwh",
             "useful_solar_start_at",
@@ -2246,6 +2407,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_CUSTOM_MODE: "0",
             REG_AI_SMART_DISC: "1",
             REG_BASE_DISCHARGE_ENABLE: "1",
+            REG_BASE_DISCHARGE_POWER: "0",
         }
 
         restore_ai_payload = {
@@ -2256,6 +2418,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             REG_CUSTOM_MODE: "0",
             REG_CONTROL_TIME1: SLOT_DISABLED,
             REG_BASE_DISCHARGE_ENABLE: "1",
+            REG_BASE_DISCHARGE_POWER: "0",
         }
 
         _LOGGER.info(

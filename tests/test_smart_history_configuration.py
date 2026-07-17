@@ -55,9 +55,29 @@ def test_smart_history_weights_accepted_days_after_filtering() -> None:
     assert weighting_position > filter_position
 
 
+def test_occupied_history_profile_is_lifted_to_daily_floor_after_low_usage_period() -> None:
+    source = SENSOR.read_text()
+
+    assert "recorder_history_floor_applied" in source
+    assert "occupied_house_profile_below_daily_floor_after_low_usage_period" in source
+    assert "average_window_energy_kwh < _OCCUPIED_DAILY_DEMAND_FLOOR_KWH" in source
+
+
 def test_smart_history_includes_the_latest_complete_rolling_day() -> None:
     source = SENSOR.read_text()
 
     assert "range(1, _RUNTIME_RECORDER_HISTORY_DAYS + 1)" in source
     assert '"recorder_history_uses_complete_rolling_days": True' in source
     assert '"recorder_history_excludes_current_day": True' not in source
+
+
+def test_house_demand_daily_prefers_the_config_entry_entity() -> None:
+    source = SENSOR.read_text()
+    method = source.split("def _house_demand_daily_entity_id", 1)[1].split(
+        "\n    def ",
+        1,
+    )[0]
+
+    assert "registry.async_get_entity_id" in method
+    assert 'f"{self._config_entry.entry_id}_house_demand_daily"' in method
+    assert "return entity_id or _HOUSE_DEMAND_DAILY_ENTITY_FALLBACK" in method

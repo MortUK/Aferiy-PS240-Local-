@@ -108,6 +108,12 @@ class AferiyOvernightPlanCard extends HTMLElement {
       0,
       "%",
     );
+    const handoverFloor = this._numberText(
+      breakdown.planned_useful_solar_handover_floor_soc
+        ?? attrs.planned_useful_solar_handover_floor_soc,
+      0,
+      "%",
+    );
     const automaticBuffer = this._numberText(
       breakdown.automatic_buffer_adjustment_soc
         ?? attrs.automatic_buffer_adjustment_soc,
@@ -263,7 +269,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
           <div><b>Battery capacity:</b> ${this._escape(batteryCapacity)}${Number.isFinite(usableCapacity) ? ` - (${this._escape(this._numberText(usableCapacity, 2, "kWh"))} Usable)` : ""}</div>
           <div><b>Day balance:</b> ${this._escape(demand)} demand · ${this._escape(solar)} solar${wholeShortfall ? ` · ${this._escape(wholeShortfall)} shortfall` : ""}</div>
           <div><b>Battery need:</b> ${this._escape(requiredNeed)} peak deficit${losses ? ` · ${this._escape(losses)} losses` : ""} · ${this._escape(buffer)} buffer</div>
-          <div><b>Buffer:</b> ${this._escape(configuredBuffer)} set${automaticBuffer ? ` · +${this._escape(automaticBuffer)} safeguards` : ""}</div>
+          <div><b>Safety buffer:</b> ${this._escape(configuredBuffer)} protected${handoverFloor ? ` · ${this._escape(handoverFloor)} planned at useful-solar handover` : ""}${automaticBuffer ? ` · +${this._escape(automaticBuffer)} safeguards` : ""}</div>
           ${cheapTopupExtra ? `<div><b>Cheap-rate top-up:</b> ${this._escape(cheapTopupExtra)} extra${solarHeadroom ? ` · leaves ${this._escape(solarHeadroom)} for solar` : ""}${solarSurplus ? ` · ${this._escape(solarSurplus)} forecast surplus` : ""}</div>` : ""}
           <div><b>Shortfall:</b> Pre-sunrise: ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset: ${this._escape(postSunset)}</div>
           ${expectedEndSoc ? `<div><b>Expected SOC at next off-peak:</b> ${this._escape(expectedEndSoc)}</div>` : ""}

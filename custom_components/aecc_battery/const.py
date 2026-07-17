@@ -75,6 +75,8 @@ POLL_INTERVAL = 5  # seconds – change this to update faster/slower
 MIN_POLL_INTERVAL = 2  # seconds – hard floor to avoid flooding the device
 
 # Power limits
+MIN_CHARGE_POWER_W = 200  # watts per unit – lowest exposed local charge target
+DEFAULT_CHARGE_POWER_W = 800  # watts per unit – default for new installations
 MAX_REGISTER_POWER_DEFAULT = 800  # watts – observed reliable local TCP lower/default limit
 PS240_EXPERIMENTAL_MAX_OUTPUT_W = 1200  # watts per unit – exposed for cautious local testing
 
@@ -181,8 +183,6 @@ SLOT_DISABLED = "0,00:00,00:00,0,0,0,0,0,0,100,10"
 MODE_SELF_CONSUMPTION = "Self-Consumption (AI)"
 MODE_CUSTOM = "Custom / Manual"
 MODE_DISABLED = "Disabled"
-
-WORK_MODES = [MODE_SELF_CONSUMPTION, MODE_CUSTOM, MODE_DISABLED]
 
 # Register sets for each mode.
 #

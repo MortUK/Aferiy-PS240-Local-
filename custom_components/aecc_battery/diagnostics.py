@@ -155,7 +155,7 @@ async def async_get_config_entry_diagnostics(
 
     live_state_section = {
         "last_update_success": coordinator.last_update_success,
-        "consecutive_failures": coordinator._consecutive_failures,
+        **coordinator.diagnostic_state,
         "last_successful_update": (
             coordinator.last_successful_update.isoformat()
             if coordinator.last_successful_update is not None

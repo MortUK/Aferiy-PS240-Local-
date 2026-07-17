@@ -13,7 +13,7 @@ import logging
 
 from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower
+from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -21,9 +21,10 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_CHARGE_POWER_W,
     DOMAIN,
     MAX_REGISTER_POWER_DEFAULT,
+    MIN_CHARGE_POWER_W,
     OVERNIGHT_CHARGE_MODE_MANUAL,
     PS240_EXPERIMENTAL_MAX_OUTPUT_W,
 )
@@ -147,16 +148,16 @@ class AeccChargePowerSlider(AeccPassivePowerSlider):
     """Charge power target slider.
 
     Local AECC charge control appears to treat this value as per-device power.
-    The AFERIY PS240 appears to clamp lower requests to 800 W per unit.
+    The exposed range is 200–1200 W per unit, defaulting to 800 W.
     """
 
     _attr_name = "Charge Power"
     _attr_icon = "mdi:battery-arrow-up"
-    _attr_native_min_value = MAX_REGISTER_POWER_DEFAULT
+    _attr_native_min_value = MIN_CHARGE_POWER_W
     _attr_native_max_value = PS240_EXPERIMENTAL_MAX_OUTPUT_W
     _attr_unique_id_suffix = "charge_power_target"
     attr_name_on_coordinator = "commanded_charge_power"
-    default_value = 800
+    default_value = DEFAULT_CHARGE_POWER_W
 
     def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
         super().__init__(coordinator, config_entry)
@@ -295,10 +296,10 @@ class AeccSmartOvernightBuffer(
     NumberEntity,
     RestoreEntity,
 ):
-    """User-selected baseline buffer for SMART overnight charging."""
+    """Protected SOC headroom for SMART overnight charging."""
 
     _attr_has_entity_name = True
-    _attr_name = "Overnight Buffer"
+    _attr_name = "Overnight Safety Buffer"
     _attr_icon = "mdi:shield-battery"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_native_unit_of_measurement = PERCENTAGE
@@ -365,77 +366,6 @@ class AeccSmartOvernightBuffer(
             smart_overnight_buffer_soc=float(buffer_soc)
         )
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
-        self.async_write_ha_state()
-
-
-class AeccBatteryCapacity(CoordinatorEntity[AeccBatteryCoordinator], NumberEntity, RestoreEntity):
-    """Editable total usable battery capacity used by display-only estimates."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Battery Capacity"
-    _attr_icon = "mdi:battery-high"
-    _attr_entity_category = EntityCategory.CONFIG
-    _attr_entity_registry_enabled_default = False
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_native_min_value = 1
-    _attr_native_max_value = 30
-    _attr_native_step = 0.001
-    _attr_mode = NumberMode.BOX
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_battery_capacity"
-        self._capacity_kwh: float = float(
-            getattr(coordinator, "battery_capacity_kwh", DEFAULT_BATTERY_CAPACITY_KWH)
-        )
-
-    async def async_added_to_hass(self) -> None:
-        """Restore the capacity after restarts without sending device commands."""
-        await super().async_added_to_hass()
-
-        last_state = await self.async_get_last_state()
-        if last_state is not None:
-            try:
-                restored = float(last_state.state)
-                if abs(restored - 5.82) < 0.05:
-                    restored = DEFAULT_BATTERY_CAPACITY_KWH
-                self._capacity_kwh = _clamp_number(
-                    restored,
-                    float(self._attr_native_min_value),
-                    float(self._attr_native_max_value),
-                )
-            except (TypeError, ValueError):
-                self._capacity_kwh = DEFAULT_BATTERY_CAPACITY_KWH
-
-        self.coordinator.battery_capacity_kwh = self._capacity_kwh
-        _LOGGER.info("Restored AECC battery capacity to %.2f kWh", self._capacity_kwh)
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def native_value(self) -> float:
-        return round(float(getattr(self.coordinator, "battery_capacity_kwh", self._capacity_kwh)), 3)
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.last_update_success
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Store total battery capacity locally for estimate sensors only."""
-        capacity = _clamp_number(
-            float(value),
-            float(self._attr_native_min_value),
-            float(self._attr_native_max_value),
-        )
-        self._capacity_kwh = round(capacity, 2)
-        self.coordinator.battery_capacity_kwh = self._capacity_kwh
-        _LOGGER.info(
-            "Stored AECC battery capacity as %.2f kWh. No battery command sent.",
-            self._capacity_kwh,
-        )
         self.async_write_ha_state()
 
 

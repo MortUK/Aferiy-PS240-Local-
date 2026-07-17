@@ -11,9 +11,10 @@ def _stale_cleanup_body() -> str:
     )[0]
 
 
-def test_stale_battery_soc_cleanup_keeps_existing_entities() -> None:
+def test_stale_battery_soc_cleanup_waits_for_confirmed_topology() -> None:
     body = _stale_cleanup_body()
 
     assert "keeping existing Battery N SOC entities" in body
-    assert "Storage_list snapshots can be partial" in body
-    assert ".async_remove(" not in body
+    assert "confirmed_storage_slot_count" in body
+    assert "if confirmed_slots <= 0" in body
+    assert "registry.async_remove(entity_id)" in body

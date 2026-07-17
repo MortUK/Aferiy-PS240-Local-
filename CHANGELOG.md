@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 1.7.7
+
+- Hardened multi-unit SOC handling against empty, partial and sudden `0%`
+  `Storage_list` snapshots while keeping the last trustworthy readings visible.
+- Added confirmed-topology tracking so obsolete higher-numbered Battery SOC
+  entities are removed only after a smaller battery list remains stable across
+  several successful polls.
+- Made Self-Gen/Zero Export explicitly clear the experimental base-feed target
+  so Feed mode cannot linger after normal operation is restored.
+- Simplified power-flow snapshots to discover the active integration entities
+  from Home Assistant instead of relying on installation-specific entity IDs.
+- Defined the overnight buffer as protected SOC headroom at useful-solar
+  handover, so learned morning demand and negative adaptive corrections cannot
+  consume the configured margin above reserve.
+- Extended the Charge Power slider down to `200 W` per unit while retaining
+  `800 W` as the default for new installations.
+- Reused the suspect-frame confirmation period for genuine battery removals and
+  expanded public diagnostics with topology progress and acceptance outcomes.
+- Removed retired entity implementations and other unused control code, aligned
+  package metadata, and expanded regression coverage for topology and register
+  safety.
+
 ## 1.7.6
 
 - Fixed startup SOC filtering for FOSSiBOT/PS240-compatible units that can briefly
