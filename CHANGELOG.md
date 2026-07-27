@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 1.7.8
+
+- Preserved the last confirmed complete battery topology when a local poll
+  temporarily omits one unit, instead of shrinking the bank and removing its
+  Home Assistant entity after only a few polls.
+- Restored known Battery SOC entities during setup from DeviceManagement and
+  the entity registry, so restarting Home Assistant during a reporting gap
+  does not silently rebuild a three-battery installation as two batteries.
+- Added diagnostics for incomplete topology, missing-unit count, first-missing
+  time, recovery time and outage duration without exposing battery serials.
+- Prevented SMART overnight charging from starting a new automatic charge while
+  local battery topology is incomplete. Existing locked BMS targets remain
+  active and normal end-of-window restoration is retained.
+- Expanded regression coverage for temporary omissions, recovery, restart
+  handling, entity preservation and the SMART charging interlock.
+
 ## 1.7.7
 
 - Hardened multi-unit SOC handling against empty, partial and sudden `0%`

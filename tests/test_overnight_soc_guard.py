@@ -36,3 +36,12 @@ def test_overnight_charge_uses_locked_target_not_global_charge_limit() -> None:
     assert 'success = await self.async_set_battery_control(\n            "Charge",' in source
     assert "charge_soc=target_soc" in source
     assert "charge_soc = self._commanded_max_soc if charge_soc is None else charge_soc" in source
+
+
+def test_smart_charge_waits_for_complete_confirmed_bank() -> None:
+    source = COORDINATOR.read_text()
+
+    assert "and self.storage_topology_incomplete" in source
+    assert "Waiting for complete battery data" in source
+    assert "SMART charging will not start until the complete bank returns" in source
+    assert "The existing locked target remains active" in source

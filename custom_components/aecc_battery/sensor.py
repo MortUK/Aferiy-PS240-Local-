@@ -568,9 +568,30 @@ async def async_setup_entry(
     for key, name, canonical_key, unit, icon, is_power in _SENSORS:
         entities.append(AeccSensor(coordinator, config_entry, key, name, canonical_key, unit, icon, is_power))
 
-    for index, entry in enumerate(coordinator.storage_entries):
+    storage_entries = coordinator.storage_entries
+    storage_slot_count = max(len(storage_entries), coordinator.inverter_count)
+    entity_registry = er.async_get(hass)
+    for slot in range(1, 16):
+        if entity_registry.async_get_entity_id(
+            "sensor",
+            DOMAIN,
+            f"{config_entry.entry_id}_battery_{slot}_soc",
+        ) is not None:
+            storage_slot_count = max(storage_slot_count, slot)
+
+    for index in range(storage_slot_count):
         unit_number = index + 1
-        if entry.get("BatterySoc") is not None:
+        entry = storage_entries[index] if index < len(storage_entries) else {}
+        if (
+            entry.get("BatterySoc") is not None
+            or index < coordinator.inverter_count
+            or entity_registry.async_get_entity_id(
+                "sensor",
+                DOMAIN,
+                f"{config_entry.entry_id}_battery_{unit_number}_soc",
+            )
+            is not None
+        ):
             entities.append(
                 AeccStorageEntrySensor(
                     coordinator,

@@ -205,15 +205,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.states.async_remove(f"sensor.{slugify(name)}_{suffix}")
     await _async_register_frontend(hass)
     _async_remove_old_per_battery_entities(hass, entry)
-    _async_remove_stale_battery_soc_entities(hass, entry, coordinator)
     _async_remove_withdrawn_config_entities(hass, entry)
     _async_remove_disabled_advanced_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(
-        coordinator.async_add_listener(
-            lambda: _async_remove_stale_battery_soc_entities(hass, entry, coordinator)
-        )
-    )
     _async_remove_empty_legacy_ip_device(hass, entry, coordinator)
     _async_register_services(hass)
 

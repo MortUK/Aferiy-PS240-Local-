@@ -191,6 +191,10 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_reported_storage_topology: tuple[str, ...] = ()
         self._storage_topology_signature: tuple[str, ...] = ()
         self._storage_topology_stable_polls: int = 0
+        self._expected_storage_topology: tuple[str, ...] = ()
+        self._storage_topology_incomplete_since: datetime | None = None
+        self._last_storage_topology_recovered_at: datetime | None = None
+        self._last_storage_topology_gap_seconds: float | None = None
         self.last_successful_update: datetime | None = None
         self.last_failed_update: datetime | None = None
         self.last_failure_reason: str | None = None
@@ -363,6 +367,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         reported_storage_topology = tuple(self._storage_units_by_key(raw))
         self._last_reported_storage_topology = reported_storage_topology
+        self._update_storage_topology_health(reported_storage_topology)
         suspect_reason = self._frame_suspect_reason(raw)
         accepted_suspect_polls = 0
         if suspect_reason is not None:
@@ -649,28 +654,73 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data: dict[str, Any],
         observed_polls: int = 1,
     ) -> None:
-        """Track how long the same accepted battery topology has remained stable."""
+        """Confirm stable topology without shrinking the known bank at runtime."""
         signature = tuple(self._storage_units_by_key(data))
         self._last_reported_storage_topology = signature
         if signature == self._storage_topology_signature:
             self._storage_topology_stable_polls += max(1, observed_polls)
+        else:
+            self._storage_topology_signature = signature
+            self._storage_topology_stable_polls = max(1, observed_polls)
+
+        if self._storage_topology_stable_polls <= _SUSPECT_FRAME_TOLERANCE:
             return
-        self._storage_topology_signature = signature
-        self._storage_topology_stable_polls = max(1, observed_polls)
+
+        expected_count = len(self._expected_storage_topology)
+        if len(signature) >= expected_count:
+            self._expected_storage_topology = signature
+        self._update_storage_topology_health(signature)
+
+    def _update_storage_topology_health(
+        self,
+        reported_signature: tuple[str, ...],
+    ) -> None:
+        """Track temporary omissions from the last confirmed storage bank."""
+        expected_count = self.confirmed_storage_slot_count
+        if expected_count <= 0:
+            return
+
+        expected = set(self._expected_storage_topology)
+        reported = set(reported_signature)
+        now = datetime.now(UTC)
+        if len(reported_signature) < expected_count or expected - reported:
+            if self._storage_topology_incomplete_since is None:
+                self._storage_topology_incomplete_since = now
+            return
+
+        if self._storage_topology_incomplete_since is not None:
+            self._last_storage_topology_gap_seconds = max(
+                0.0,
+                (now - self._storage_topology_incomplete_since).total_seconds(),
+            )
+            self._last_storage_topology_recovered_at = now
+            self._storage_topology_incomplete_since = None
 
     @property
     def storage_topology_confirmed(self) -> bool:
-        """Return whether one non-empty topology has survived several good polls."""
-        return bool(self._storage_topology_signature) and (
-            self._storage_topology_stable_polls > _SUSPECT_FRAME_TOLERANCE
-        )
+        """Return whether a non-empty expected storage bank is known."""
+        return bool(self._expected_storage_topology) or self.inverter_count > 0
 
     @property
     def confirmed_storage_slot_count(self) -> int:
-        """Return the confirmed number of locally reported storage slots."""
-        if not self.storage_topology_confirmed:
-            return 0
-        return len(self._storage_topology_signature)
+        """Return the last confirmed complete storage-bank size."""
+        return max(len(self._expected_storage_topology), self.inverter_count)
+
+    @property
+    def storage_topology_incomplete(self) -> bool:
+        """Return whether the current poll omits a confirmed storage unit."""
+        if not self._expected_storage_topology:
+            return (
+                self.inverter_count > 0
+                and len(self._last_reported_storage_topology) < self.inverter_count
+            )
+        missing_identities = set(self._expected_storage_topology) - set(
+            self._last_reported_storage_topology
+        )
+        return bool(missing_identities) or (
+            len(self._last_reported_storage_topology)
+            < self.confirmed_storage_slot_count
+        )
 
     @property
     def diagnostic_state(self) -> dict[str, Any]:
@@ -695,6 +745,44 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             "storage_topology_confirmed": self.storage_topology_confirmed,
             "confirmed_storage_slot_count": self.confirmed_storage_slot_count,
+            "storage_topology_incomplete": self.storage_topology_incomplete,
+            "storage_topology_incomplete_since": (
+                self._storage_topology_incomplete_since.isoformat()
+                if self._storage_topology_incomplete_since is not None
+                else None
+            ),
+            "storage_topology_missing_units": self._storage_topology_summary(
+                tuple(
+                    key
+                    for key in self._expected_storage_topology
+                    if key not in set(self._last_reported_storage_topology)
+                )
+            ),
+            "storage_topology_missing_unit_count": max(
+                0,
+                self.confirmed_storage_slot_count
+                - len(self._last_reported_storage_topology),
+            ),
+            "expected_storage_topology_source": (
+                "storage_poll"
+                if self._expected_storage_topology
+                else "device_management"
+                if self.inverter_count > 0
+                else None
+            ),
+            "last_storage_topology_recovered_at": (
+                self._last_storage_topology_recovered_at.isoformat()
+                if self._last_storage_topology_recovered_at is not None
+                else None
+            ),
+            "last_storage_topology_gap_seconds": (
+                round(self._last_storage_topology_gap_seconds, 1)
+                if self._last_storage_topology_gap_seconds is not None
+                else None
+            ),
+            "expected_storage_topology": self._storage_topology_summary(
+                self._expected_storage_topology
+            ),
             "last_accepted_storage_topology": self._storage_topology_summary(
                 self._storage_topology_signature
             ),
@@ -1212,6 +1300,9 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "last_action_at": self._overnight_last_action_at.isoformat()
             if self._overnight_last_action_at
             else None,
+            "storage_topology_incomplete": self.storage_topology_incomplete,
+            "expected_storage_slot_count": self.confirmed_storage_slot_count,
+            "reported_storage_slot_count": len(self._last_reported_storage_topology),
         }
 
         if target_soc is None:
@@ -1250,6 +1341,24 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         if window["effective_start"] <= now < window["effective_end"]:
+            if (
+                mode == OVERNIGHT_CHARGE_MODE_SMART
+                and self.storage_topology_incomplete
+            ):
+                self._reset_overnight_charge_confirmation()
+                if self._overnight_scheduler_started_charge:
+                    self._set_overnight_status(
+                        "Charging with incomplete battery data",
+                        "A battery is temporarily missing from local data. The existing locked target remains active, but no new automatic command will be sent until the complete bank returns.",
+                        base_attrs,
+                    )
+                else:
+                    self._set_overnight_status(
+                        "Waiting for complete battery data",
+                        "A battery is temporarily missing from local data; SMART charging will not start until the complete bank returns.",
+                        base_attrs,
+                    )
+                return
             if current_soc <= target_soc:
                 is_new_charge_start = not (
                     self._overnight_scheduler_started_charge
@@ -2789,6 +2898,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if device.get("role") in ("Master", "Executor")
             and device.get("serial")
         )
+        self._update_storage_topology_health(self._last_reported_storage_topology)
         self.master_serial = next(
             (
                 str(device["serial"])

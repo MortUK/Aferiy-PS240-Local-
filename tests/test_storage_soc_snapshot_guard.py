@@ -25,8 +25,10 @@ def _subject_class():
         "_storage_unit_label",
         "_frame_suspect_reason",
         "_update_storage_topology_confirmation",
+        "_update_storage_topology_health",
         "storage_topology_confirmed",
         "confirmed_storage_slot_count",
+        "storage_topology_incomplete",
         "diagnostic_state",
         "_storage_topology_summary",
         "_safe_float",
@@ -40,6 +42,8 @@ def _subject_class():
     namespace: dict[str, object] = {}
     exec(
         "from __future__ import annotations\n"
+        "from datetime import datetime, timezone\n"
+        "UTC = timezone.utc\n"
         "from typing import Any\n"
         "_SUSPECT_FRAME_TOLERANCE = 3\n"
         "_SOC_COLLAPSE_FLOOR = 5.0\n"
@@ -94,6 +98,12 @@ def test_topology_requires_four_matching_good_polls() -> None:
     subject = _subject_class()()
     subject._storage_topology_signature = ()
     subject._storage_topology_stable_polls = 0
+    subject._expected_storage_topology = ()
+    subject.inverter_count = 0
+    subject._last_reported_storage_topology = ()
+    subject._storage_topology_incomplete_since = None
+    subject._last_storage_topology_recovered_at = None
+    subject._last_storage_topology_gap_seconds = None
     frame = {"Storage_list": [_unit("master", 80), _unit("executor", 79)]}
 
     for _ in range(3):
@@ -106,18 +116,63 @@ def test_topology_requires_four_matching_good_polls() -> None:
     assert subject.confirmed_storage_slot_count == 2
 
 
-def test_persistent_reduced_topology_reuses_suspect_poll_confirmation() -> None:
+def test_persistent_reduced_topology_does_not_shrink_known_bank() -> None:
     subject = _subject_class()()
     subject._storage_topology_signature = ("StorageSN:master", "StorageSN:executor")
     subject._storage_topology_stable_polls = 20
     subject._last_reported_storage_topology = subject._storage_topology_signature
+    subject._expected_storage_topology = subject._storage_topology_signature
+    subject.inverter_count = 0
+    subject._storage_topology_incomplete_since = None
+    subject._last_storage_topology_recovered_at = None
+    subject._last_storage_topology_gap_seconds = None
     reduced_frame = {"Storage_list": [_unit("master", 80)]}
 
     subject._update_storage_topology_confirmation(reduced_frame, observed_polls=4)
 
     assert subject.storage_topology_confirmed is True
-    assert subject.confirmed_storage_slot_count == 1
+    assert subject.confirmed_storage_slot_count == 2
+    assert subject.storage_topology_incomplete is True
     assert subject._storage_topology_stable_polls == 4
+
+
+def test_temporary_omission_records_duration_and_recovers() -> None:
+    subject = _subject_class()()
+    full_topology = ("StorageSN:master", "StorageSN:executor")
+    subject._expected_storage_topology = full_topology
+    subject.inverter_count = 0
+    subject._last_reported_storage_topology = full_topology
+    subject._storage_topology_incomplete_since = None
+    subject._last_storage_topology_recovered_at = None
+    subject._last_storage_topology_gap_seconds = None
+
+    subject._last_reported_storage_topology = ("StorageSN:master",)
+    subject._update_storage_topology_health(subject._last_reported_storage_topology)
+
+    assert subject.storage_topology_incomplete is True
+    assert subject._storage_topology_incomplete_since is not None
+
+    subject._last_reported_storage_topology = full_topology
+    subject._update_storage_topology_health(full_topology)
+
+    assert subject.storage_topology_incomplete is False
+    assert subject._storage_topology_incomplete_since is None
+    assert subject._last_storage_topology_recovered_at is not None
+    assert subject._last_storage_topology_gap_seconds is not None
+
+
+def test_device_management_count_detects_incomplete_startup_poll() -> None:
+    subject = _subject_class()()
+    subject._expected_storage_topology = ()
+    subject.inverter_count = 3
+    subject._last_reported_storage_topology = (
+        "StorageSN:master",
+        "StorageSN:executor-1",
+    )
+
+    assert subject.storage_topology_confirmed is True
+    assert subject.confirmed_storage_slot_count == 3
+    assert subject.storage_topology_incomplete is True
 
 
 def test_diagnostic_topology_summary_does_not_expose_serial_values() -> None:
