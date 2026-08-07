@@ -12,7 +12,7 @@ Core entities focus on data and controls that come directly from the local batte
 - Charge Power Target and Discharge Power Target
 - PV Surplus Charge Trigger
 - Charge Limit and Discharge Limit
-- Overnight Charge, Manual SOC, Off-Peak Tariff, Off-Peak Start, and Off-Peak End
+- Overnight Charge, Manual SOC, Off-Peak Start, and Off-Peak End
 - Solar Availability
 - Overnight Status and Recommended Overnight SOC
 - House Demand Energy and House Demand Daily
@@ -37,7 +37,7 @@ or cloud-originated changes.
 
 `PV Surplus Charge Trigger` is useful when the AFERIY system shares the same
 electrical system with an unmanaged micro-inverter or another PV source that it
-does not directly control. When your Smart Meter (usually Shelly) sees export rise above the chosen `0 W` to `50 W`
+does not directly control. When your Smart Meter (usually Shelly) sees export rise above the chosen `0 W` to `100 W`
 threshold, the batteries ramp up and start charging from the extra energy. A
 small buffer helps avoid hunting or "chattering" around zero export.
 
@@ -48,7 +48,26 @@ Diagnostic entities are intended for troubleshooting rather than dashboards:
 - Consecutive Poll Failures
 - Last Command Result
 - Firmware Version
+- Battery N Raw Status for each locally reported physical unit
+- Battery N Discharge Power for each locally reported physical unit
+- Battery Bank Topology, including the latest identity/order/role anomaly
 - Selected raw or derived diagnostic readings
+
+The per-unit diagnostic entities follow the unit's local identity rather than
+its current `Storage_list` position. Their attributes include the current slot,
+serial, DeviceManagement role, SOC, individual discharge power, and any scalar
+status/fault/alarm/protection/temperature fields returned by the firmware.
+Values are exposed read-only and without guessing undocumented status meanings.
+The topology entity records the last anomaly time and type even after the bank
+has recovered, provided Home Assistant itself has not restarted.
+
+`Battery Bank Topology` normally reports `healthy`, changes to `degraded` when
+a confirmed unit is absent, and changes to `discharge_imbalance` after a
+high-SOC unit remains at no more than 10 W for five minutes while another unit
+is discharging at least 100 W. Units already at the configured reserve plus the
+3% safeguard are excluded. The sustained state is suitable for a Companion App
+notification automation and resets automatically when balanced discharge
+returns.
 
 ## Energy Estimate Sensors
 

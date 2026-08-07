@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -209,6 +210,8 @@ _OVERNIGHT_BALANCED_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.75
 _OVERNIGHT_STRONG_SOLAR_PRE_USEFUL_CREDIT_FACTOR = 0.90
 _OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MIN = -0.15
 _OVERNIGHT_ADAPTIVE_MORNING_CREDIT_MAX = 0.15
+_OVERNIGHT_MORNING_CREDIT_TO_HANDOVER_SOC = 20.0
+_OVERNIGHT_MORNING_HANDOVER_ADJUSTMENT_MAX_SOC = 5.0
 _OVERNIGHT_RECENT_MORNING_UPLIFT_MIN_KWH = 0.15
 _OVERNIGHT_RECENT_MORNING_UPLIFT_MAX_KWH = 1.5
 _OVERNIGHT_RECENT_MORNING_UPLIFT_CAPACITY_FACTOR = 0.15
@@ -306,6 +309,20 @@ def _effective_adaptive_target_adjustment_soc(
     if protect_solar_handover_buffer:
         return max(0.0, requested_adjustment_soc)
     return requested_adjustment_soc
+
+
+def _morning_handover_accuracy_adjustment_soc(
+    adaptive_morning_solar_credit_adjustment: float,
+) -> float:
+    """Convert learned morning under-runs into protected target headroom."""
+    return min(
+        _OVERNIGHT_MORNING_HANDOVER_ADJUSTMENT_MAX_SOC,
+        max(
+            0.0,
+            -adaptive_morning_solar_credit_adjustment
+            * _OVERNIGHT_MORNING_CREDIT_TO_HANDOVER_SOC,
+        ),
+    )
 
 
 def _state_float(
@@ -605,6 +622,27 @@ async def async_setup_entry(
                     SensorDeviceClass.BATTERY,
                 )
             )
+
+    for index, entry in enumerate(storage_entries):
+        identity_key = coordinator.storage_identity_key(entry, index)
+        unit_number = index + 1
+        entities.extend(
+            (
+                AeccStorageUnitStatusSensor(
+                    coordinator,
+                    config_entry,
+                    identity_key,
+                    unit_number,
+                ),
+                AeccStorageUnitDischargePowerSensor(
+                    coordinator,
+                    config_entry,
+                    identity_key,
+                    unit_number,
+                ),
+            )
+        )
+    entities.append(AeccStorageTopologyHealthSensor(coordinator, config_entry))
     for key, name, power_keys, icon in _ENERGY_SENSORS:
         entities.append(AeccEnergySensor(coordinator, config_entry, key, name, power_keys, icon))
 
@@ -861,6 +899,249 @@ class AeccStorageEntrySensor(CoordinatorEntity[AeccBatteryCoordinator], RestoreE
             "available_unit_count": len(self.coordinator.storage_entries),
             "raw_value": self._raw_value(),
             "last_accepted_value": self._last_value,
+        }
+
+
+class AeccStorageIdentitySensor(CoordinatorEntity[AeccBatteryCoordinator], SensorEntity):
+    """Base for diagnostics that follow a physical unit if slots reorder."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self,
+        coordinator: AeccBatteryCoordinator,
+        config_entry: ConfigEntry,
+        identity_key: str,
+        unit_number: int,
+        suffix: str,
+        name: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._identity_key = identity_key
+        self._unit_number = unit_number
+        identity_digest = hashlib.sha256(identity_key.encode("utf-8")).hexdigest()[:12]
+        self._attr_unique_id = (
+            f"{config_entry.entry_id}_storage_{identity_digest}_{suffix}"
+        )
+        self._attr_name = name
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    def _current_entry(self) -> tuple[int | None, dict[str, Any] | None]:
+        return self.coordinator.storage_entry_by_identity(self._identity_key)
+
+    @property
+    def available(self) -> bool:
+        _index, entry = self._current_entry()
+        return entry is not None and super().available
+
+    @staticmethod
+    def _raw_health_fields(entry: dict[str, Any]) -> dict[str, Any]:
+        """Return scalar status/fault/protection fields without guessing meanings."""
+        markers = ("status", "fault", "error", "alarm", "warn", "protect", "temp")
+        fields: dict[str, Any] = {}
+        for key, value in entry.items():
+            if not any(marker in key.lower() for marker in markers):
+                continue
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                fields[key] = value
+            if len(fields) >= 24:
+                break
+        return fields
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        index, entry = self._current_entry()
+        if entry is None:
+            return {
+                "initial_unit_number": self._unit_number,
+                "identity_source": self._identity_key.partition(":")[0],
+                "currently_reported": False,
+            }
+
+        serial = str(
+            entry.get("StorageSN")
+            or entry.get("deviceSn")
+            or entry.get("DeviceSn")
+            or ""
+        ).strip() or None
+        discharge_w = (
+            self.coordinator.storage_entry_val(index, "BatteryDischargingPower")
+            if index is not None
+            else None
+        )
+        return {
+            "initial_unit_number": self._unit_number,
+            "current_slot": index + 1 if index is not None else None,
+            "currently_reported": True,
+            "identity_source": self._identity_key.partition(":")[0],
+            "serial": serial,
+            "device_address": entry.get("DevAddr"),
+            "system_role": self.coordinator.device_role_for_serial(serial),
+            "battery_soc": entry.get("BatterySoc"),
+            "individual_discharge_power_w": discharge_w,
+            "raw_health_fields": self._raw_health_fields(entry),
+        }
+
+
+class AeccStorageUnitStatusSensor(AeccStorageIdentitySensor):
+    """Expose the unit's raw status code without unsafe interpretation."""
+
+    _attr_icon = "mdi:battery-heart-variant"
+
+    def __init__(
+        self,
+        coordinator: AeccBatteryCoordinator,
+        config_entry: ConfigEntry,
+        identity_key: str,
+        unit_number: int,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            config_entry,
+            identity_key,
+            unit_number,
+            "raw_status",
+            f"Battery {unit_number} Raw Status",
+        )
+
+    @property
+    def native_value(self) -> Any:
+        _index, entry = self._current_entry()
+        if entry is None:
+            return None
+        for field in ("StorageStatus", "status", "deviceStatus"):
+            if entry.get(field) is not None:
+                return entry[field]
+        return "present"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose fault identity without duplicating fast SOC/power history."""
+        index, entry = self._current_entry()
+        if entry is None:
+            return {
+                "initial_unit_number": self._unit_number,
+                "identity_source": self._identity_key.partition(":")[0],
+                "currently_reported": False,
+            }
+
+        serial = str(
+            entry.get("StorageSN")
+            or entry.get("deviceSn")
+            or entry.get("DeviceSn")
+            or ""
+        ).strip() or None
+        return {
+            "initial_unit_number": self._unit_number,
+            "current_slot": index + 1 if index is not None else None,
+            "currently_reported": True,
+            "identity_source": self._identity_key.partition(":")[0],
+            "serial": serial,
+            "device_address": entry.get("DevAddr"),
+            "system_role": self.coordinator.device_role_for_serial(serial),
+            "raw_health_fields": self._raw_health_fields(entry),
+        }
+
+
+class AeccStorageUnitDischargePowerSensor(AeccStorageIdentitySensor):
+    """Expose discharge power for one stable physical unit."""
+
+    _attr_icon = "mdi:battery-arrow-down"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+
+    def __init__(
+        self,
+        coordinator: AeccBatteryCoordinator,
+        config_entry: ConfigEntry,
+        identity_key: str,
+        unit_number: int,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            config_entry,
+            identity_key,
+            unit_number,
+            "discharge_power",
+            f"Battery {unit_number} Discharge Power",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        index, entry = self._current_entry()
+        if index is None or entry is None:
+            return None
+        value = self.coordinator.storage_entry_val(index, "BatteryDischargingPower")
+        try:
+            return round(float(value), 1) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+
+class AeccStorageTopologyHealthSensor(
+    CoordinatorEntity[AeccBatteryCoordinator], SensorEntity
+):
+    """Summarise current bank completeness and retain the latest anomaly."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:transit-connection-variant"
+
+    def __init__(
+        self,
+        coordinator: AeccBatteryCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{config_entry.entry_id}_storage_topology_health"
+        self._attr_name = "Battery Bank Topology"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return self.coordinator.device_info
+
+    @property
+    def native_value(self) -> str:
+        if self.coordinator.storage_discharge_imbalance_active:
+            return "discharge_imbalance"
+        return "degraded" if self.coordinator.storage_topology_incomplete else "healthy"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        diagnostics = self.coordinator.diagnostic_state
+        return {
+            "reported_unit_count": len(self.coordinator.storage_entries),
+            "confirmed_unit_count": self.coordinator.confirmed_storage_slot_count,
+            "missing_unit_count": diagnostics["storage_topology_missing_unit_count"],
+            "incomplete_since": diagnostics["storage_topology_incomplete_since"],
+            "last_recovered_at": diagnostics["last_storage_topology_recovered_at"],
+            "last_gap_seconds": diagnostics["last_storage_topology_gap_seconds"],
+            "anomaly_count": diagnostics["storage_anomaly_count"],
+            "last_anomaly_kind": diagnostics["last_storage_anomaly_kind"],
+            "last_anomaly_at": diagnostics["last_storage_anomaly_at"],
+            "last_anomaly_details": diagnostics["last_storage_anomaly_details"],
+            "discharge_imbalance_active": diagnostics[
+                "storage_discharge_imbalance_active"
+            ],
+            "discharge_imbalance_since": diagnostics[
+                "storage_discharge_imbalance_since"
+            ],
+            "last_discharge_imbalance_at": diagnostics[
+                "last_storage_discharge_imbalance_at"
+            ],
+            "last_discharge_recovered_at": diagnostics[
+                "last_storage_discharge_recovered_at"
+            ],
+            "discharge_imbalance_details": diagnostics[
+                "storage_discharge_imbalance_details"
+            ],
+            "last_suspect_reason": diagnostics["last_suspect_frame_reason"],
+            "last_suspect_at": diagnostics["last_suspect_frame_at"],
         }
 
 
@@ -3122,6 +3403,18 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             )
         )
         adaptive_target_adjustment_kwh = capacity_kwh * adaptive_target_adjustment_soc / 100
+        morning_handover_accuracy_adjustment_soc = (
+            _morning_handover_accuracy_adjustment_soc(
+                _as_float(
+                    projection.get("adaptive_morning_solar_credit_adjustment"),
+                    0.0,
+                )
+                or 0.0
+            )
+        )
+        morning_handover_accuracy_adjustment_kwh = (
+            capacity_kwh * morning_handover_accuracy_adjustment_soc / 100
+        )
         base_required_ac_kwh = max(0.0, float(projection["required_start_energy_kwh"]))
         cheap_topup_attrs = self._cheap_rate_topup_attrs(projection, usable_capacity_kwh)
         cheap_topup_target_kwh = _as_float(cheap_topup_attrs.get("cheap_rate_topup_target_kwh"), 0.0) or 0.0
@@ -3149,7 +3442,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             required_battery_kwh,
             buffer_kwh,
             confidence_adjustment_kwh,
-            adaptive_target_adjustment_kwh,
+            adaptive_target_adjustment_kwh
+            + morning_handover_accuracy_adjustment_kwh,
         )
         planned_handover_floor_soc = _planned_handover_floor_soc(
             reserve_soc,
@@ -3240,6 +3534,19 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                 "adaptive_overnight_target_adjustment_energy_kwh": round(
                     adaptive_target_adjustment_kwh,
                     3,
+                ),
+                "learned_morning_handover_adjustment_soc": round(
+                    morning_handover_accuracy_adjustment_soc,
+                    1,
+                ),
+                "learned_morning_handover_adjustment_energy_kwh": round(
+                    morning_handover_accuracy_adjustment_kwh,
+                    3,
+                ),
+                "learned_morning_handover_adjustment_basis": (
+                    "completed_morning_soc_accuracy"
+                    if morning_handover_accuracy_adjustment_soc > 0
+                    else "no_learned_morning_shortfall"
                 ),
                 "usable_capacity_above_reserve_kwh": round(usable_capacity_kwh, 3),
                 "required_ac_energy_kwh": round(required_ac_kwh, 3),
@@ -3942,6 +4249,7 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         current = start
         cumulative_deficit_kwh = 0.0
         maximum_deficit_kwh = 0.0
+        maximum_deficit_before_useful_solar_kwh = 0.0
         demand_kwh = 0.0
         solar_kwh = 0.0
         solar_surplus_kwh = 0.0
@@ -3997,6 +4305,11 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             solar_kwh += segment_solar_kwh
             cumulative_deficit_kwh += segment_demand_kwh - segment_solar_kwh
             maximum_deficit_kwh = max(maximum_deficit_kwh, cumulative_deficit_kwh)
+            if useful_solar_start_at is None:
+                maximum_deficit_before_useful_solar_kwh = max(
+                    maximum_deficit_before_useful_solar_kwh,
+                    cumulative_deficit_kwh,
+                )
             if is_pre_sunrise_segment:
                 pre_sunrise_demand_kwh += segment_demand_kwh
                 pre_sunrise_solar_kwh += segment_solar_kwh
@@ -4084,8 +4397,13 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         )
         solar_covers_day = solar_kwh >= demand_kwh
         if solar_capable_day and solar_covers_day:
-            required_start_energy_kwh = pre_sunrise_guard_need_kwh
-            required_energy_basis = "morning_bridge_on_solar_capable_day"
+            required_start_energy_kwh = max(
+                maximum_deficit_before_useful_solar_kwh,
+                pre_sunrise_guard_need_kwh,
+            )
+            required_energy_basis = (
+                "maximum_deficit_until_useful_solar_on_solar_capable_day"
+            )
         else:
             required_start_energy_kwh = max(maximum_deficit_kwh, pre_sunrise_guard_need_kwh)
             required_energy_basis = "maximum_peak_window_deficit"
@@ -4130,6 +4448,10 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_capable_ratio": _OVERNIGHT_SOLAR_CAPABLE_RATIO,
             "solar_capable_min_kwh": _OVERNIGHT_SOLAR_CAPABLE_MIN_KWH,
             "maximum_cumulative_deficit_kwh": round(maximum_deficit_kwh, 3),
+            "maximum_deficit_before_useful_solar_kwh": round(
+                maximum_deficit_before_useful_solar_kwh,
+                3,
+            ),
             "pre_sunrise_need_kwh": round(pre_sunrise_guard_need_kwh, 3),
             "pre_sunrise_net_need_kwh": round(pre_sunrise_net_need_kwh, 3),
             "pre_sunrise_guard_need_kwh": round(pre_sunrise_guard_need_kwh, 3),

@@ -351,6 +351,7 @@ def _async_remove_withdrawn_config_entities(hass: HomeAssistant, entry: ConfigEn
         (Platform.SENSOR, f"{entry.entry_id}_runtime_at_current_house_demand"),
         (Platform.SENSOR, f"{entry.entry_id}_smart_overnight_accuracy"),
         (Platform.SENSOR, f"{entry.entry_id}_smart_morning_accuracy"),
+        (Platform.SELECT, f"{entry.entry_id}_smart_tariff_preset"),
         (Platform.SWITCH, f"{entry.entry_id}_solar_unavailable"),
     )
     for platform, unique_id in withdrawn_entities:

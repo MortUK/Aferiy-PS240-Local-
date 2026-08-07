@@ -8,6 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONST = ROOT / "custom_components" / "aecc_battery" / "const.py"
+SELECT = ROOT / "custom_components" / "aecc_battery" / "select.py"
+INIT = ROOT / "custom_components" / "aecc_battery" / "__init__.py"
 
 
 def _constants() -> dict[str, object]:
@@ -60,3 +62,12 @@ def test_tariff_labels_cover_every_preset() -> None:
     labels = constants["TARIFF_PRESET_LABELS"]
 
     assert labels.keys() == presets.keys()
+
+
+def test_runtime_tariff_selector_is_withdrawn() -> None:
+    select_source = SELECT.read_text()
+    init_source = INIT.read_text()
+
+    assert "AeccSmartTariffPresetSelect" not in select_source
+    assert "_smart_tariff_preset" in init_source
+    assert "Platform.SELECT" in init_source

@@ -24,6 +24,7 @@ from .const import (
     DEFAULT_CHARGE_POWER_W,
     DOMAIN,
     MAX_REGISTER_POWER_DEFAULT,
+    MAX_SURPLUS_CHARGE_TRIGGER_W,
     MIN_CHARGE_POWER_W,
     OVERNIGHT_CHARGE_MODE_MANUAL,
     PS240_EXPERIMENTAL_MAX_OUTPUT_W,
@@ -229,7 +230,7 @@ class AeccPvSurplusChargeTrigger(
     _attr_device_class = NumberDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_native_min_value = 0
-    _attr_native_max_value = 50
+    _attr_native_max_value = MAX_SURPLUS_CHARGE_TRIGGER_W
     _attr_native_step = 1
     _attr_mode = NumberMode.SLIDER
 

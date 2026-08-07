@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 1.7.9
+
+- Corrected SMART overnight planning so solar-capable mornings bridge the full
+  cumulative battery shortfall until sustained useful solar, rather than
+  stopping when early PV merely begins supporting part of the house load.
+- Converted learned morning SOC under-runs into separate target headroom, so
+  forecast error cannot consume the user-configured handover safety buffer.
+- Expanded the PV Surplus Charge Trigger range from `0-50 W` to `0-100 W` to
+  match the current AEC Cloud app while retaining `50 W` as the default.
+- Removed the redundant runtime Off-Peak Tariff selector. SMART charging now
+  relies on the Off-Peak Start and Off-Peak End time entities, while existing
+  effective times and integration-option presets remain compatible.
+- Added read-only, identity-stable per-unit raw-status and discharge-power
+  diagnostics, plus battery-bank topology history that records unit-order,
+  identity-set and DeviceManagement role changes for future fault analysis.
+- Added a five-minute sustained discharge-imbalance detector for high-SOC units
+  that remain idle while another unit supplies meaningful power, providing a
+  dependable Home Assistant notification trigger without transient alerts.
+- Reduced recorder growth from the new diagnostics by keeping rapidly changing
+  SOC and power off raw-status attributes and retaining stable snapshots for
+  continuing suspect-frame and discharge-imbalance incidents.
+
 ## 1.7.8
 
 - Preserved the last confirmed complete battery topology when a local poll

@@ -27,7 +27,11 @@ def _module_function(name: str):
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name == name
     )
-    namespace: dict[str, object] = {"_FULL_SOC": 100.0}
+    namespace: dict[str, object] = {
+        "_FULL_SOC": 100.0,
+        "_OVERNIGHT_MORNING_CREDIT_TO_HANDOVER_SOC": 20.0,
+        "_OVERNIGHT_MORNING_HANDOVER_ADJUSTMENT_MAX_SOC": 5.0,
+    }
     compiled = compile(
         ast.Module(body=[function], type_ignores=[]),
         str(SENSOR),
@@ -80,6 +84,49 @@ def test_negative_adaptive_correction_remains_available_for_whole_day_plans() ->
     )
 
     assert effective_adjustment(-2.0, False) == -2.0
+
+
+def test_learned_morning_shortfall_adds_headroom_outside_the_user_buffer() -> None:
+    handover_adjustment = _module_function(
+        "_morning_handover_accuracy_adjustment_soc"
+    )
+
+    assert handover_adjustment(-0.15) == 3.0
+    assert handover_adjustment(-0.05) == 1.0
+    assert handover_adjustment(0.10) == 0.0
+
+
+def test_real_morning_case_keeps_three_percent_at_useful_solar() -> None:
+    """A 24% target that reached 10% should become 28%, leaving about 14%."""
+    capacity_kwh = 5.874
+    reserve_soc = 10.0
+    configured_buffer_kwh = capacity_kwh * 0.03
+    learned_handover_kwh = capacity_kwh * 0.03
+    predicted_bridge_kwh = 0.679
+    observed_bridge_kwh = 0.84
+
+    target_soc = reserve_soc + (
+        predicted_bridge_kwh
+        + configured_buffer_kwh
+        + learned_handover_kwh
+    ) / capacity_kwh * 100
+    rounded_target_soc = int(-(-target_soc // 1))
+    observed_handover_soc = rounded_target_soc - observed_bridge_kwh / capacity_kwh * 100
+
+    assert rounded_target_soc == 28
+    assert observed_handover_soc >= 13.0
+
+
+def test_solar_capable_day_bridges_to_useful_solar_not_first_support() -> None:
+    source = SENSOR.read_text()
+
+    assert "maximum_deficit_before_useful_solar_kwh" in source
+    assert (
+        'required_energy_basis = (\n'
+        '                "maximum_deficit_until_useful_solar_on_solar_capable_day"'
+        in source
+    )
+    assert 'required_energy_basis = "morning_bridge_on_solar_capable_day"' not in source
 
 
 def test_learned_morning_demand_is_covered_before_the_buffer() -> None:

@@ -3,7 +3,7 @@
 ![AFERIY PS240 local battery control for Home Assistant](docs/images/aferiy-ps240-readme-hero.jpeg)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://www.hacs.xyz/)
-[![Version](https://img.shields.io/badge/version-v1.7.8-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.7.9-blue.svg)](CHANGELOG.md)
 [![HACS validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hacs.yml)
 [![Hassfest validation](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml/badge.svg)](https://github.com/MortUK/Aferiy-PS240-Local-/actions/workflows/hassfest.yml)
 [![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-RichardOwen-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/richardowen)
@@ -28,6 +28,8 @@ This is a cleaned-up, AFERIY-focused fork of the AECC local TCP integration. It 
 - Custom AFERIY PS240 icon
 - Bundled AFERIY Overnight Plan dashboard card
 - Connection health and last-command result sensors
+- Per-unit raw status/discharge diagnostics that follow physical identities
+- Battery-bank topology anomaly history for executor communication faults
 - Grid meter agreement and charging reason diagnostics
 
 ## Install With HACS
@@ -64,6 +66,17 @@ System-level readings are reported through the master. System Average Battery SO
 
 The integration creates generic `Battery 1 SOC`, `Battery 2 SOC`, and similar entities from the local `Storage_list` entries reported by the master. This avoids tying dashboards to a particular serial number when a unit is replaced.
 
+Diagnostic `Battery N Raw Status` and `Battery N Discharge Power` entities are
+tied to each physical unit's local identity, so they continue following the
+same unit if the master's `Storage_list` order changes. `Battery Bank Topology`
+reports whether the complete bank is currently present and retains the latest
+unit-order, identity-set or master/executor role anomaly. Raw status values are
+intentionally not interpreted because AFERIY has not published a status-code
+map for the local protocol. The topology entity changes to
+`discharge_imbalance` when a high-SOC unit remains near zero output for five
+minutes while another unit is supplying at least `100 W`; this can be used as a
+Companion App notification trigger while filtering brief load-sharing changes.
+
 After adding, removing, or replacing a battery/inverter, restart Home Assistant or reload the integration so the individual battery entity list is rebuilt from the master. The Battery Capacity preset does not control battery identification.
 
 ## Options
@@ -76,7 +89,7 @@ Open the integration options to adjust:
 - Off-peak start and end times
 - External helper confirmations for advanced estimates
 
-The device Configuration section also provides Overnight Charge mode, Manual SOC, Off-Peak Tariff, Off-Peak Start/End, Solar Availability, Overnight Status, and Recommended Overnight SOC. Battery Capacity is available when Advanced Energy Estimate Sensors is enabled.
+The device Configuration section also provides Overnight Charge mode, Manual SOC, Off-Peak Start/End, Solar Availability, Overnight Status, and Recommended Overnight SOC. Battery Capacity is available when Advanced Energy Estimate Sensors is enabled.
 
 The advanced estimate sensors are disabled by default because they can depend on external Home Assistant entities such as grid meters, solar forecast data, or household demand history.
 
@@ -221,7 +234,7 @@ with an unmanaged micro-inverter or another PV source that it does not directly
 control.
 
 As soon as your Smart Meter (usually Shelly) sees that you are exporting more than your set value
-between `0 W` and `50 W`, it tells your home batteries to ramp up and start
+between `0 W` and `100 W`, it tells your home batteries to ramp up and start
 charging from the extra energy.
 
 Having a small buffer gives the system a stable threshold to trigger clean,

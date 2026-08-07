@@ -28,6 +28,7 @@ from .const import (
     DOMAIN,
     MAX_BATTERY_POWER_W,
     MAX_REGISTER_POWER_DEFAULT,
+    MAX_SURPLUS_CHARGE_TRIGGER_W,
     MIN_POLL_INTERVAL,
     MODE_CUSTOM,
     MODE_DISABLED,
@@ -78,6 +79,10 @@ _ADAPTIVE_TARGET_SOC_STEP = 1.0
 _ADAPTIVE_TARGET_SOC_DECAY = 0.98
 _SUSPECT_FRAME_TOLERANCE = 3
 _SOC_COLLAPSE_FLOOR = 5.0
+_DISCHARGE_IMBALANCE_MIN_ACTIVE_W = 100.0
+_DISCHARGE_IMBALANCE_MAX_IDLE_W = 10.0
+_DISCHARGE_IMBALANCE_SOC_MARGIN = 3.0
+_DISCHARGE_IMBALANCE_CONFIRM_SECONDS = 300
 
 # ── Unified field mapping ─────────────────────────────────────────────────────
 # Maps canonical sensor keys to (source, field_name, scale) tuples.
@@ -195,6 +200,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._storage_topology_incomplete_since: datetime | None = None
         self._last_storage_topology_recovered_at: datetime | None = None
         self._last_storage_topology_gap_seconds: float | None = None
+        self._storage_identity_order: tuple[str, ...] = ()
+        self._storage_anomaly_count: int = 0
+        self._last_storage_anomaly_kind: str | None = None
+        self._last_storage_anomaly_at: str | None = None
+        self._last_storage_anomaly_details: dict[str, Any] = {}
+        self._storage_discharge_imbalance_since: datetime | None = None
+        self._storage_discharge_imbalance_active: bool = False
+        self._last_storage_discharge_imbalance_at: datetime | None = None
+        self._last_storage_discharge_recovered_at: datetime | None = None
+        self._storage_discharge_imbalance_details: dict[str, Any] = {}
         self.last_successful_update: datetime | None = None
         self.last_failed_update: datetime | None = None
         self.last_failure_reason: str | None = None
@@ -376,9 +391,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if self._suspect_streak < _SUSPECT_FRAME_TOLERANCE:
                 self._suspect_streak += 1
                 self._suspect_frames_total += 1
-                self._last_suspect_reason = suspect_reason
-                self._last_suspect_at = datetime.now(UTC).isoformat()
-                self._last_suspect_outcome = "held"
+                self._record_suspect_hold(suspect_reason)
                 self._suspect_storage_topology = reported_storage_topology
                 _LOGGER.info(
                     "Rejecting suspect poll frame (%s) - keeping last good data (%d/%d)",
@@ -403,6 +416,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_successful_update = datetime.now(UTC)
         self.last_failure_reason = None
         self._last_good_storage_soc_count = self._storage_soc_count(raw)
+        self._track_storage_identity_order(reported_storage_topology)
+        self._update_storage_discharge_health(raw)
         self._update_storage_topology_confirmation(
             raw,
             observed_polls=max(1, accepted_suspect_polls),
@@ -411,6 +426,16 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_maybe_refresh_device_management()
         self._schedule_overnight_evaluation()
         return raw
+
+    def _record_suspect_hold(self, reason: str) -> None:
+        """Record the start of a suspect episode without timestamp churn."""
+        if (
+            reason != self._last_suspect_reason
+            or self._last_suspect_outcome == "cleared_by_healthy_frame"
+        ):
+            self._last_suspect_reason = reason
+            self._last_suspect_at = datetime.now(UTC).isoformat()
+        self._last_suspect_outcome = "held"
 
     async def _async_maybe_refresh_device_management(self) -> None:
         """Refresh slower-changing device metadata without affecting live polling."""
@@ -649,6 +674,117 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if isinstance(unit, dict)
         }
 
+    def storage_identity_key(self, unit: dict[str, Any], fallback_index: int) -> str:
+        """Return the stable identity used by per-unit diagnostic entities."""
+        return self._storage_unit_key(unit, fallback_index)
+
+    def storage_entry_by_identity(
+        self,
+        identity_key: str,
+    ) -> tuple[int | None, dict[str, Any] | None]:
+        """Find the current slot and data for one physical storage unit."""
+        for index, unit in enumerate(self.storage_entries):
+            if self._storage_unit_key(unit, index) == identity_key:
+                return index, unit
+        return None, None
+
+    def _record_storage_anomaly(
+        self,
+        kind: str,
+        details: dict[str, Any],
+    ) -> None:
+        """Remember a read-only storage-bank anomaly for entities and diagnostics."""
+        self._storage_anomaly_count += 1
+        self._last_storage_anomaly_kind = kind
+        self._last_storage_anomaly_at = datetime.now(UTC).isoformat()
+        self._last_storage_anomaly_details = details
+
+    def _track_storage_identity_order(self, signature: tuple[str, ...]) -> None:
+        """Record unit reordering or identity-set changes after a frame is accepted."""
+        previous = self._storage_identity_order
+        self._storage_identity_order = signature
+        if not previous or signature == previous:
+            return
+
+        if len(signature) == len(previous) and set(signature) == set(previous):
+            kind = "unit_order_changed"
+        else:
+            kind = "unit_set_changed"
+        changed_slots = sum(
+            1
+            for index in range(max(len(previous), len(signature)))
+            if (previous[index] if index < len(previous) else None)
+            != (signature[index] if index < len(signature) else None)
+        )
+        self._record_storage_anomaly(
+            kind,
+            {
+                "changed_slot_count": changed_slots,
+                "previous_slot_count": len(previous),
+                "current_slot_count": len(signature),
+            },
+        )
+
+    def _update_storage_discharge_health(self, data: dict[str, Any]) -> None:
+        """Detect a sustained high-SOC unit that is not sharing discharge load."""
+        unit_readings: list[tuple[float, float]] = []
+        for unit in data.get("Storage_list") or []:
+            if not isinstance(unit, dict):
+                continue
+            soc = self._safe_float(unit.get("BatterySoc"))
+            raw_power = self._safe_float(unit.get("BatteryDischargingPower"))
+            if soc is None or raw_power is None:
+                continue
+            if soc <= self._commanded_min_soc + _DISCHARGE_IMBALANCE_SOC_MARGIN:
+                continue
+            unit_readings.append((soc, max(0.0, raw_power / 10.0)))
+
+        powers = [power for _soc, power in unit_readings]
+        active_power = max(powers, default=0.0)
+        idle_count = sum(
+            power <= _DISCHARGE_IMBALANCE_MAX_IDLE_W for power in powers
+        )
+        imbalance_now = (
+            len(powers) >= 2
+            and active_power >= _DISCHARGE_IMBALANCE_MIN_ACTIVE_W
+            and idle_count > 0
+        )
+        now = datetime.now(UTC)
+
+        if not imbalance_now:
+            if self._storage_discharge_imbalance_active:
+                self._last_storage_discharge_recovered_at = now
+            self._storage_discharge_imbalance_since = None
+            self._storage_discharge_imbalance_active = False
+            self._storage_discharge_imbalance_details = {}
+            return
+
+        details = {
+            "reporting_high_soc_unit_count": len(powers),
+            "non_discharging_unit_count": idle_count,
+            "highest_unit_discharge_w": round(active_power, 1),
+            "lowest_unit_discharge_w": round(min(powers), 1),
+            "confirmation_seconds": _DISCHARGE_IMBALANCE_CONFIRM_SECONDS,
+        }
+        if self._storage_discharge_imbalance_since is None:
+            self._storage_discharge_imbalance_since = now
+            self._storage_discharge_imbalance_details = details
+            return
+
+        elapsed = (now - self._storage_discharge_imbalance_since).total_seconds()
+        if elapsed < _DISCHARGE_IMBALANCE_CONFIRM_SECONDS:
+            return
+        if not self._storage_discharge_imbalance_active:
+            self._storage_discharge_imbalance_active = True
+            self._last_storage_discharge_imbalance_at = now
+            self._storage_discharge_imbalance_details = details
+            self._record_storage_anomaly("sustained_discharge_imbalance", details)
+
+    @property
+    def storage_discharge_imbalance_active(self) -> bool:
+        """Return whether a per-unit discharge mismatch survived confirmation."""
+        return self._storage_discharge_imbalance_active
+
     def _update_storage_topology_confirmation(
         self,
         data: dict[str, Any],
@@ -788,6 +924,29 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ),
             "last_reported_storage_topology": self._storage_topology_summary(
                 self._last_reported_storage_topology
+            ),
+            "storage_anomaly_count": self._storage_anomaly_count,
+            "last_storage_anomaly_kind": self._last_storage_anomaly_kind,
+            "last_storage_anomaly_at": self._last_storage_anomaly_at,
+            "last_storage_anomaly_details": dict(self._last_storage_anomaly_details),
+            "storage_discharge_imbalance_active": self._storage_discharge_imbalance_active,
+            "storage_discharge_imbalance_since": (
+                self._storage_discharge_imbalance_since.isoformat()
+                if self._storage_discharge_imbalance_since is not None
+                else None
+            ),
+            "last_storage_discharge_imbalance_at": (
+                self._last_storage_discharge_imbalance_at.isoformat()
+                if self._last_storage_discharge_imbalance_at is not None
+                else None
+            ),
+            "last_storage_discharge_recovered_at": (
+                self._last_storage_discharge_recovered_at.isoformat()
+                if self._last_storage_discharge_recovered_at is not None
+                else None
+            ),
+            "storage_discharge_imbalance_details": dict(
+                self._storage_discharge_imbalance_details
             ),
         }
 
@@ -2668,7 +2827,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_surplus_charge_trigger(self, value: int) -> bool:
         """Set the PV surplus threshold that triggers grid-connected charging."""
-        trigger_w = max(0, min(int(value), 50))
+        trigger_w = max(0, min(int(value), MAX_SURPLUS_CHARGE_TRIGGER_W))
         payload = {REG_SURPLUS_CHARGE_TRIGGER: str(trigger_w)}
         return await self._logged_write(
             payload,
@@ -2887,6 +3046,30 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.topology_reported_count = len(topology)
         else:
             self.topology_reported_count = 0
+
+        previous_roles = {
+            str(device.get("serial")): str(device.get("role") or "Unknown")
+            for device in self.system_topology
+            if device.get("serial")
+        }
+        current_roles = {
+            str(device.get("serial")): str(device.get("role") or "Unknown")
+            for device in topology
+            if device.get("serial")
+        }
+        role_changes = [
+            {"from": previous_roles[unit], "to": current_roles[unit]}
+            for unit in sorted(previous_roles.keys() & current_roles.keys())
+            if previous_roles[unit] != current_roles[unit]
+        ]
+        if role_changes:
+            self._record_storage_anomaly(
+                "unit_role_changed",
+                {
+                    "changed_unit_count": len(role_changes),
+                    "role_changes": role_changes,
+                },
+            )
 
         self.system_topology = topology
         self.topology_device_count = sum(

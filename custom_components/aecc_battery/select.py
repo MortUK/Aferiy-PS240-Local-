@@ -18,11 +18,7 @@ from .const import (
     CONF_ADVANCED_ENERGY_SENSORS,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_CHARGE_POWER_W,
-    DEFAULT_OFF_PEAK_END,
-    DEFAULT_OFF_PEAK_START,
-    DEFAULT_TARIFF_PRESET,
     DOMAIN,
-    CONF_TARIFF_PRESET,
     MODE_CUSTOM,
     MODE_SELF_CONSUMPTION,
     MAX_REGISTER_POWER_DEFAULT,
@@ -30,8 +26,6 @@ from .const import (
     OVERNIGHT_CHARGE_MODE_FROM_LABEL,
     OVERNIGHT_CHARGE_MODE_LABELS,
     OVERNIGHT_CHARGE_MODE_DISABLED,
-    TARIFF_PRESET_LABELS,
-    TARIFF_PRESETS,
     battery_capacity_for_modules,
     battery_capacity_preset_label,
 )
@@ -46,31 +40,6 @@ CAPACITY_PRESET_OPTIONS = [
     for module_count in BATTERY_CAPACITY_PRESET_MODULE_COUNTS
 ]
 OVERNIGHT_CHARGE_MODE_OPTIONS = list(OVERNIGHT_CHARGE_MODE_LABELS.values())
-TARIFF_PRESET_SHORT_LABELS = {
-    "snug_octopus": "Snug Octopus",
-    "octopus_intelligent_go": "Intelligent Octopus Go",
-    "octopus_go": "Octopus Go",
-    "edf_goelectric_35": "EDF GoElectric 35",
-    "british_gas_electric_driver": "British Gas EV Power+",
-    "eon_next_drive": "E.ON Next Drive",
-    "british_gas_economy_7": "British Gas Standard E7",
-    "edf_e7_fixed": "EDF E7 Fixed",
-    "ovo_simpler_energy_e7": "OVO Simpler Energy E7",
-    "octopus_e7": "Octopus E7",
-    "eon_next_pumped_fixed": "E.ON Next Pumped Fixed",
-    "custom": "Custom",
-}
-TARIFF_PRESET_OPTIONS = [TARIFF_PRESET_SHORT_LABELS[value] for value in TARIFF_PRESETS]
-TARIFF_PRESET_FROM_LABEL = {
-    label: value for value, label in TARIFF_PRESET_SHORT_LABELS.items()
-}
-TARIFF_PRESET_FROM_LABEL.update(
-    {
-        "Octopus Intelligent Go": "octopus_intelligent_go",
-        "British Gas Electric Driver": "british_gas_electric_driver",
-        "British Gas Economy 7": "british_gas_economy_7",
-    }
-)
 SOLAR_AVAILABLE = "Solar Available"
 SOLAR_UNAVAILABLE = "Solar Unavailable"
 SOLAR_AVAILABILITY_OPTIONS = [SOLAR_AVAILABLE, SOLAR_UNAVAILABLE]
@@ -85,7 +54,6 @@ async def async_setup_entry(
     entities: list[SelectEntity] = [
         AeccOperatingModeSelect(coordinator, config_entry),
         AeccAutomaticOvernightChargingSelect(coordinator, config_entry),
-        AeccSmartTariffPresetSelect(coordinator, config_entry),
         AeccSolarAvailabilitySelect(coordinator, config_entry),
     ]
     if config_entry.options.get(CONF_ADVANCED_ENERGY_SENSORS, False):
@@ -423,136 +391,6 @@ class AeccAutomaticOvernightChargingSelect(
         await self.coordinator.async_save_runtime_preferences(overnight_charging_mode=mode)
         self.coordinator.async_set_updated_data(self.coordinator.data or {})
         self.async_write_ha_state()
-
-
-class AeccSmartTariffPresetSelect(
-    CoordinatorEntity[AeccBatteryCoordinator],
-    SelectEntity,
-    RestoreEntity,
-):
-    """SMART Config tariff preset selector used by local overnight charging."""
-
-    _attr_icon = "mdi:clock-star-four-points"
-    _attr_has_entity_name = True
-    _attr_name = "Off-Peak Tariff"
-    _attr_entity_category = EntityCategory.CONFIG
-    _attr_options = TARIFF_PRESET_OPTIONS
-
-    def __init__(self, coordinator: AeccBatteryCoordinator, config_entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_smart_tariff_preset"
-        self._selected_preset = config_entry.options.get(
-            CONF_TARIFF_PRESET,
-            DEFAULT_TARIFF_PRESET,
-        )
-
-    async def async_added_to_hass(self) -> None:
-        """Restore the SMART tariff preset without reloading the integration."""
-        await super().async_added_to_hass()
-
-        if not getattr(self.coordinator, "runtime_preferences_loaded", False):
-            last_state = await self.async_get_last_state()
-            if last_state is not None and last_state.state in TARIFF_PRESET_FROM_LABEL:
-                self._selected_preset = TARIFF_PRESET_FROM_LABEL[last_state.state]
-        else:
-            self._selected_preset = getattr(
-                self.coordinator,
-                "smart_tariff_preset",
-                DEFAULT_TARIFF_PRESET,
-            )
-
-        self.coordinator.set_smart_tariff_preset(self._selected_preset)
-        await self.coordinator.async_save_runtime_preferences(
-            smart_tariff_preset=self._selected_preset,
-            off_peak_start=getattr(self.coordinator, "off_peak_start", DEFAULT_OFF_PEAK_START),
-            off_peak_end=getattr(self.coordinator, "off_peak_end", DEFAULT_OFF_PEAK_END),
-            manual_off_peak_start=getattr(
-                self.coordinator,
-                "manual_off_peak_start",
-                DEFAULT_OFF_PEAK_START,
-            ),
-            manual_off_peak_end=getattr(
-                self.coordinator,
-                "manual_off_peak_end",
-                DEFAULT_OFF_PEAK_END,
-            ),
-        )
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return self.coordinator.device_info
-
-    @property
-    def current_option(self) -> str | None:
-        preset = getattr(self.coordinator, "smart_tariff_preset", self._selected_preset)
-        return TARIFF_PRESET_SHORT_LABELS.get(
-            preset,
-            TARIFF_PRESET_SHORT_LABELS[DEFAULT_TARIFF_PRESET],
-        )
-
-    @property
-    def available(self) -> bool:
-        return True
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        preset = getattr(self.coordinator, "smart_tariff_preset", self._selected_preset)
-        start, end = self._window_for_preset(preset)
-        return {
-            "preset": preset,
-            "preset_label": TARIFF_PRESET_LABELS.get(preset),
-            "off_peak_start": start,
-            "off_peak_end": end,
-            "effective_charge_start": self._add_minutes(start, 1),
-            "effective_charge_end": self._add_minutes(end, -5),
-            "note": (
-                "The integration starts 1 minute after off-peak begins and restores "
-                "Self-Gen/Zero Export 5 minutes before it ends."
-            ),
-        }
-
-    async def async_select_option(self, option: str) -> None:
-        if option not in TARIFF_PRESET_FROM_LABEL:
-            _LOGGER.warning("Unknown tariff preset selected: %s", option)
-            return
-
-        preset = TARIFF_PRESET_FROM_LABEL[option]
-        start, end = self._window_for_preset(preset)
-        self._selected_preset = preset
-        self.coordinator.set_smart_tariff_preset(preset)
-        if preset == "custom":
-            start, end = self._window_for_preset(preset)
-            self.coordinator.set_off_peak_window(start, end)
-        await self.coordinator.async_save_runtime_preferences(
-            smart_tariff_preset=preset,
-            off_peak_start=start,
-            off_peak_end=end,
-            manual_off_peak_start=getattr(self.coordinator, "manual_off_peak_start", start),
-            manual_off_peak_end=getattr(self.coordinator, "manual_off_peak_end", end),
-        )
-        self.coordinator.async_set_updated_data(self.coordinator.data or {})
-        self.async_write_ha_state()
-
-    def _window_for_preset(self, preset: str) -> tuple[str, str]:
-        if preset == "custom":
-            return (
-                getattr(self.coordinator, "manual_off_peak_start", DEFAULT_OFF_PEAK_START),
-                getattr(self.coordinator, "manual_off_peak_end", DEFAULT_OFF_PEAK_END),
-            )
-        return TARIFF_PRESETS.get(
-            preset,
-            (DEFAULT_OFF_PEAK_START, DEFAULT_OFF_PEAK_END),
-        )
-
-    @staticmethod
-    def _add_minutes(value: str, minutes: int) -> str:
-        try:
-            hour_s, minute_s = value.split(":", 1)
-            total_minutes = (int(hour_s) * 60 + int(minute_s) + minutes) % (24 * 60)
-            return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
-        except (AttributeError, TypeError, ValueError):
-            return value
 
 
 class AeccSolarAvailabilitySelect(
