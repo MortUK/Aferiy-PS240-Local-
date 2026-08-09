@@ -137,6 +137,8 @@ class AferiyOvernightPlanCard extends HTMLElement {
     );
     const usefulSolar = this._timeText(attrs.solar_break_even_at, true)
       || "No break-even in forecast window";
+    const latestOutcome = attrs.latest_smart_overnight_outcome || {};
+    const latestOutcomeLine = this._smartOutcomeLine(latestOutcome);
     const confidence = this._titleText(attrs.forecast_confidence, "Waiting");
     const history = this._cleanText(attrs.recorder_history_status, "warming").replaceAll("_", " ");
     const smartHistoryText = smartHistory && this._isKnown(smartHistory.state)
@@ -274,6 +276,7 @@ class AferiyOvernightPlanCard extends HTMLElement {
           <div><b>Shortfall:</b> Pre-sunrise: ${this._escape(this._numberText(breakdown.pre_sunrise_need_kwh, 2, "kWh"))} · Post-sunset: ${this._escape(postSunset)}</div>
           ${expectedEndSoc ? `<div><b>Expected SOC at next off-peak:</b> ${this._escape(expectedEndSoc)}</div>` : ""}
           <div><b>Useful solar:</b> ${this._escape(usefulSolar)}</div>
+          ${latestOutcomeLine ? `<div><b>Last SMART morning:</b> ${latestOutcomeLine}</div>` : ""}
           <div><b>Confidence:</b> ${this._escape(confidence)} · History ${this._escape(history)}</div>
           <div><b>Smart History:</b> ${this._escape(smartHistoryText)}</div>
         </div>
@@ -313,6 +316,29 @@ class AferiyOvernightPlanCard extends HTMLElement {
         <div class="secondary">${this._escape(secondary)}</div>
       </div>
     `;
+  }
+
+  _smartOutcomeLine(outcome) {
+    if (!outcome || !outcome.completed_at) return "";
+    const actualSoc = outcome.soc_at_actual_useful_solar == null
+      ? Number.NaN : Number(outcome.soc_at_actual_useful_solar);
+    const floorSoc = outcome.planned_handover_floor_soc == null
+      ? Number.NaN : Number(outcome.planned_handover_floor_soc);
+    const differenceSoc = outcome.handover_difference_soc == null
+      ? Number.NaN : Number(outcome.handover_difference_soc);
+    const actualTime = this._timeText(outcome.actual_useful_solar_at, true);
+    const result = this._cleanText(outcome.result, "waiting").replaceAll("_", " ");
+    const cause = this._cleanText(outcome.likely_cause, "").replaceAll("_", " ");
+    const parts = [];
+    if (Number.isFinite(actualSoc)) parts.push(`${actualSoc.toFixed(0)}% at handover`);
+    if (Number.isFinite(floorSoc)) parts.push(`planned ${floorSoc.toFixed(0)}%`);
+    if (Number.isFinite(differenceSoc)) {
+      parts.push(`${differenceSoc >= 0 ? "+" : ""}${differenceSoc.toFixed(1)}%`);
+    }
+    if (actualTime) parts.push(`solar ${actualTime}`);
+    parts.push(result);
+    if (cause && cause !== "within tolerance") parts.push(cause);
+    return parts.map((part) => this._escape(part)).join(" · ");
   }
 
   _entityPriority(entityId) {

@@ -3344,6 +3344,8 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
             "solar_unavailable_override": solar_unavailable,
             "solar_unavailable_entity": solar_unavailable_entity,
             "solar_override_status": "Batteries Only" if solar_unavailable else "Solar forecast active",
+            "latest_smart_overnight_outcome": self.coordinator.latest_smart_outcome,
+            "smart_overnight_outcome_count": len(self.coordinator.smart_outcome_history),
             **fallback_attrs,
             **recorder_history_attrs,
         }

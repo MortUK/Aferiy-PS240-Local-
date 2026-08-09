@@ -83,6 +83,90 @@ _DISCHARGE_IMBALANCE_MIN_ACTIVE_W = 100.0
 _DISCHARGE_IMBALANCE_MAX_IDLE_W = 10.0
 _DISCHARGE_IMBALANCE_SOC_MARGIN = 3.0
 _DISCHARGE_IMBALANCE_CONFIRM_SECONDS = 300
+_SMART_OUTCOME_HISTORY_LIMIT = 60
+_SMART_OUTCOME_SOLAR_CONFIRM_SECONDS = 60
+_SMART_OUTCOME_SOLAR_MIN_W = 100.0
+_SMART_OUTCOME_SOLAR_MARGIN_W = 75.0
+_SMART_OUTCOME_SOLAR_DEMAND_FACTOR = 1.1
+_SMART_OUTCOME_TRACKING_FALLBACK_HOURS = 12
+_SMART_OUTCOME_TRACKING_AFTER_FORECAST_HOURS = 6
+
+
+def _smart_outcome_result(
+    planned_floor_soc: float,
+    actual_handover_soc: float | None,
+    off_peak_end_soc: float | None,
+    locked_target_soc: float | None,
+    forecast_useful_solar_at: datetime | None,
+    actual_useful_solar_at: datetime | None,
+) -> dict[str, Any]:
+    """Explain one SMART morning outcome without changing future targets."""
+    tolerance_soc = 2.0
+    difference_soc = (
+        round(actual_handover_soc - planned_floor_soc, 1)
+        if actual_handover_soc is not None
+        else None
+    )
+    forecast_error_minutes = (
+        round(
+            (actual_useful_solar_at - forecast_useful_solar_at).total_seconds() / 60,
+            1,
+        )
+        if forecast_useful_solar_at is not None
+        and actual_useful_solar_at is not None
+        else None
+    )
+    target_shortfall_soc = (
+        round(locked_target_soc - off_peak_end_soc, 1)
+        if locked_target_soc is not None and off_peak_end_soc is not None
+        else None
+    )
+
+    if actual_handover_soc is None or actual_useful_solar_at is None:
+        result = "no_useful_solar_observed"
+        likely_cause = "useful_solar_not_observed"
+        reason = (
+            "Live solar did not remain above the useful-solar threshold before "
+            "the morning outcome window closed."
+        )
+    elif difference_soc is not None and difference_soc < -tolerance_soc:
+        result = "too_low"
+        if target_shortfall_soc is not None and target_shortfall_soc > 1.0:
+            likely_cause = "locked_target_not_reached"
+            reason = (
+                f"SOC ended off-peak {target_shortfall_soc:.1f}% below the locked target "
+                "and was below the planned floor when useful solar arrived."
+            )
+        elif forecast_error_minutes is not None and forecast_error_minutes > 15:
+            likely_cause = "useful_solar_later_than_forecast"
+            reason = (
+                f"Useful solar arrived {forecast_error_minutes:.0f} minutes later than forecast "
+                "and SOC finished below the planned handover floor."
+            )
+        else:
+            likely_cause = "morning_demand_or_capacity_assumption"
+            reason = (
+                "The locked target was reached closely enough, but morning battery use was "
+                "greater than the plan allowed before useful solar arrived."
+            )
+    elif difference_soc is not None and difference_soc > tolerance_soc:
+        result = "too_high"
+        likely_cause = "more_soc_than_required"
+        reason = "SOC remained above the planned handover floor when useful solar arrived."
+    else:
+        result = "about_right"
+        likely_cause = "within_tolerance"
+        reason = "SOC reached useful-solar handover within 2% of the planned floor."
+
+    return {
+        "result": result,
+        "reason": reason,
+        "likely_cause": likely_cause,
+        "handover_difference_soc": difference_soc,
+        "forecast_error_minutes": forecast_error_minutes,
+        "locked_target_shortfall_at_off_peak_end_soc": target_shortfall_soc,
+        "tolerance_soc": tolerance_soc,
+    }
 
 # ── Unified field mapping ─────────────────────────────────────────────────────
 # Maps canonical sensor keys to (source, field_name, scale) tuples.
@@ -287,6 +371,10 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "result": "waiting",
             "reason": "Waiting for a completed SMART overnight cycle.",
         }
+        self._smart_outcome_history: list[dict[str, Any]] = []
+        self._smart_outcome_pending: dict[str, Any] | None = None
+        self._smart_outcome_solar_candidate_at: datetime | None = None
+        self._smart_outcome_solar_candidate_soc: float | None = None
         self.solar_unavailable_override: bool = False
         self._commanded_min_soc: int = 10
         self._commanded_max_soc: int = 100
@@ -524,6 +612,14 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         self.solar_unavailable_override = bool(data.get("solar_unavailable_override", False))
+        history = data.get("smart_outcome_history")
+        if isinstance(history, list):
+            self._smart_outcome_history = [
+                dict(item) for item in history if isinstance(item, dict)
+            ][-_SMART_OUTCOME_HISTORY_LIMIT:]
+        pending = data.get("smart_outcome_pending")
+        if isinstance(pending, dict) and pending.get("window_key"):
+            self._smart_outcome_pending = dict(pending)
         if self.overnight_charging_mode == OVERNIGHT_CHARGE_MODE_DISABLED:
             self._set_overnight_off_status()
 
@@ -550,6 +646,8 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "manual_off_peak_start": self.manual_off_peak_start,
             "manual_off_peak_end": self.manual_off_peak_end,
             "solar_unavailable_override": bool(self.solar_unavailable_override),
+            "smart_outcome_history": self._smart_outcome_history[-_SMART_OUTCOME_HISTORY_LIMIT:],
+            "smart_outcome_pending": self._smart_outcome_pending,
         }
         data.update(updates)
         try:
@@ -1257,6 +1355,23 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "reason": "Waiting for a completed SMART morning bridge calculation.",
         }
 
+    @property
+    def latest_smart_outcome(self) -> dict[str, Any]:
+        """Most recently completed compact SMART overnight outcome."""
+        if not self._smart_outcome_history:
+            return {}
+        return dict(self._smart_outcome_history[-1])
+
+    @property
+    def smart_outcome_history(self) -> list[dict[str, Any]]:
+        """Rolling compact SMART outcome journal, oldest first."""
+        return [dict(item) for item in self._smart_outcome_history]
+
+    @property
+    def pending_smart_outcome(self) -> dict[str, Any] | None:
+        """Current morning outcome being observed, if any."""
+        return dict(self._smart_outcome_pending) if self._smart_outcome_pending else None
+
     def _set_overnight_off_status(self) -> None:
         """Make the overnight status reflect a disabled scheduler immediately."""
         next_status = {
@@ -1354,6 +1469,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         live_target_soc, live_target_source = self._overnight_target_soc(mode)
         current_soc = self._safe_float(self.get_value("average_battery_soc"))
         self._track_morning_accuracy(now)
+        self._track_smart_outcome(now)
         self._record_overnight_accuracy_if_due(now, window)
         if mode == OVERNIGHT_CHARGE_MODE_DISABLED:
             self._set_overnight_off_status()
@@ -1381,6 +1497,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current_soc is not None and current_soc <= live_target_soc
                 )
                 lock_context = self._snapshot_overnight_target_context()
+                lock_context["recommended_soc_at_lock"] = live_target_soc
                 lock_context["soc_at_target_lock"] = (
                     round(current_soc, 1) if current_soc is not None else None
                 )
@@ -1741,6 +1858,218 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             **self._overnight_locked_target_context,
         }
         self._ensure_morning_accuracy_tracker(self._overnight_last_completed_plan)
+        self._start_smart_outcome(self._overnight_last_completed_plan)
+
+    def _start_smart_outcome(self, plan: dict[str, Any]) -> None:
+        """Start one compact, persisted plan-versus-result observation."""
+        window_key = str(plan.get("window_key") or "")
+        if not window_key:
+            return
+        if any(item.get("window_key") == window_key for item in self._smart_outcome_history):
+            return
+        if self._smart_outcome_pending is not None:
+            if self._smart_outcome_pending.get("window_key") == window_key:
+                return
+            self._finalize_smart_outcome(
+                actual_useful_solar_at=None,
+                actual_handover_soc=None,
+                pv_power_w=None,
+                house_demand_w=None,
+                useful_solar_threshold_w=None,
+            )
+
+        locked_at = self._plan_datetime(plan.get("locked_at")) or datetime.now(UTC)
+        local_locked_at = dt_util.as_local(locked_at)
+        window = self._overnight_window(local_locked_at)
+        window_end_at = window["end"]
+        forecast_at = self._plan_datetime(plan.get("useful_solar_start_at"))
+        tracking_base = max(window_end_at, forecast_at) if forecast_at else window_end_at
+        tracking_hours = (
+            _SMART_OUTCOME_TRACKING_AFTER_FORECAST_HOURS
+            if forecast_at
+            else _SMART_OUTCOME_TRACKING_FALLBACK_HOURS
+        )
+        planned_floor = self._safe_float(
+            plan.get("planned_useful_solar_handover_floor_soc")
+        )
+        if planned_floor is None:
+            _minimum_soc, _buffer_soc, planned_floor = self._reserve_floor_soc_for_plan(plan)
+
+        self._smart_outcome_pending = {
+            "window_key": window_key,
+            "started_at": datetime.now(UTC).isoformat(),
+            "off_peak_start": self.off_peak_start,
+            "off_peak_end": self.off_peak_end,
+            "off_peak_end_at": window_end_at.isoformat(),
+            "tracking_deadline_at": (tracking_base + timedelta(hours=tracking_hours)).isoformat(),
+            "recommended_soc_at_lock": plan.get("recommended_soc_at_lock", plan.get("target_soc")),
+            "locked_target_soc": plan.get("target_soc"),
+            "locked_target_at": plan.get("locked_at"),
+            "rolling_recheck_count": plan.get("rolling_recheck_count", 0),
+            "soc_at_target_lock": plan.get("soc_at_target_lock"),
+            "charged_during_window": bool(plan.get("charged_during_window")),
+            "planned_handover_floor_soc": round(planned_floor, 1),
+            "minimum_soc": int(self._commanded_min_soc),
+            "configured_buffer_soc": plan.get("configured_buffer_soc"),
+            "forecast_useful_solar_at": forecast_at.isoformat() if forecast_at else None,
+            "projected_house_demand_kwh": plan.get("projected_house_demand_kwh"),
+            "projected_solar_kwh": plan.get("projected_solar_kwh"),
+            "pre_sunrise_need_kwh": plan.get("pre_sunrise_need_kwh"),
+            "confidence_mode": plan.get("confidence_mode"),
+            "soc_at_off_peak_end": None,
+            "lowest_soc_before_actual_useful_solar": None,
+            "lowest_soc_at": None,
+        }
+        self._smart_outcome_solar_candidate_at = None
+        self._smart_outcome_solar_candidate_soc = None
+        self._save_runtime_preferences_later()
+
+    def _estimated_house_demand_entity_id(self) -> str:
+        """Resolve the integration-owned live House Demand entity."""
+        if not self._entry_id:
+            return "sensor.aecc_battery_estimated_house_demand"
+        registry = er.async_get(self.hass)
+        entity_id = registry.async_get_entity_id(
+            "sensor",
+            DOMAIN,
+            f"{self._entry_id}_estimated_house_demand",
+        )
+        return entity_id or "sensor.aecc_battery_estimated_house_demand"
+
+    def _live_useful_solar_snapshot(
+        self,
+    ) -> tuple[bool, float | None, float | None, float | None]:
+        """Compare current total PV with the same whole-house demand estimate."""
+        state = self.hass.states.get(self._estimated_house_demand_entity_id())
+        if state is None or state.state in ("unknown", "unavailable"):
+            return False, None, None, None
+        house_demand_w = self._safe_float(state.state)
+        if house_demand_w is None:
+            return False, None, None, None
+        pv_power_w = self._safe_float(state.attributes.get("pv_power_w"))
+        if pv_power_w is None:
+            pv_power_w = self._safe_float(self.get_value("pv_power"))
+        if pv_power_w is None:
+            return False, None, round(house_demand_w, 1), None
+        threshold_w = max(
+            _SMART_OUTCOME_SOLAR_MIN_W,
+            house_demand_w + _SMART_OUTCOME_SOLAR_MARGIN_W,
+            house_demand_w * _SMART_OUTCOME_SOLAR_DEMAND_FACTOR,
+        )
+        return (
+            pv_power_w >= threshold_w,
+            round(pv_power_w, 1),
+            round(house_demand_w, 1),
+            round(threshold_w, 1),
+        )
+
+    def _track_smart_outcome(self, now: datetime) -> None:
+        """Finish the pending journal entry when live solar truly covers demand."""
+        pending = self._smart_outcome_pending
+        if not pending:
+            return
+        off_peak_end_at = self._plan_datetime(pending.get("off_peak_end_at"))
+        deadline_at = self._plan_datetime(pending.get("tracking_deadline_at"))
+        if off_peak_end_at is None or deadline_at is None or now < off_peak_end_at:
+            return
+
+        current_soc = self._safe_float(self.get_value("average_battery_soc"))
+        if current_soc is None:
+            return
+        current_soc = round(current_soc, 1)
+        if pending.get("soc_at_off_peak_end") is None:
+            pending["soc_at_off_peak_end"] = current_soc
+            pending["soc_at_off_peak_end_recorded_at"] = datetime.now(UTC).isoformat()
+            self._save_runtime_preferences_later()
+
+        lowest_soc = self._safe_float(pending.get("lowest_soc_before_actual_useful_solar"))
+        if lowest_soc is None or current_soc < lowest_soc - _MORNING_TRACKER_MIN_UPDATE_SOC:
+            pending["lowest_soc_before_actual_useful_solar"] = current_soc
+            pending["lowest_soc_at"] = datetime.now(UTC).isoformat()
+
+        useful, pv_power_w, house_demand_w, threshold_w = self._live_useful_solar_snapshot()
+        if useful:
+            if self._smart_outcome_solar_candidate_at is None:
+                self._smart_outcome_solar_candidate_at = now
+                self._smart_outcome_solar_candidate_soc = current_soc
+            elif (
+                now - self._smart_outcome_solar_candidate_at
+            ).total_seconds() >= _SMART_OUTCOME_SOLAR_CONFIRM_SECONDS:
+                self._finalize_smart_outcome(
+                    actual_useful_solar_at=self._smart_outcome_solar_candidate_at,
+                    actual_handover_soc=(
+                        self._smart_outcome_solar_candidate_soc
+                        if self._smart_outcome_solar_candidate_soc is not None
+                        else current_soc
+                    ),
+                    pv_power_w=pv_power_w,
+                    house_demand_w=house_demand_w,
+                    useful_solar_threshold_w=threshold_w,
+                )
+                return
+        else:
+            self._smart_outcome_solar_candidate_at = None
+            self._smart_outcome_solar_candidate_soc = None
+
+        if now >= deadline_at:
+            self._finalize_smart_outcome(
+                actual_useful_solar_at=None,
+                actual_handover_soc=None,
+                pv_power_w=pv_power_w,
+                house_demand_w=house_demand_w,
+                useful_solar_threshold_w=threshold_w,
+            )
+
+    def _finalize_smart_outcome(
+        self,
+        *,
+        actual_useful_solar_at: datetime | None,
+        actual_handover_soc: float | None,
+        pv_power_w: float | None,
+        house_demand_w: float | None,
+        useful_solar_threshold_w: float | None,
+    ) -> None:
+        """Append one compact outcome, deduplicated and capped at 60 nights."""
+        pending = self._smart_outcome_pending
+        if not pending:
+            return
+        planned_floor_soc = self._safe_float(pending.get("planned_handover_floor_soc")) or 0.0
+        forecast_at = self._plan_datetime(pending.get("forecast_useful_solar_at"))
+        explanation = _smart_outcome_result(
+            planned_floor_soc,
+            actual_handover_soc,
+            self._safe_float(pending.get("soc_at_off_peak_end")),
+            self._safe_float(pending.get("locked_target_soc")),
+            forecast_at,
+            actual_useful_solar_at,
+        )
+        record = {
+            **pending,
+            **explanation,
+            "actual_useful_solar_at": (
+                actual_useful_solar_at.isoformat() if actual_useful_solar_at else None
+            ),
+            "soc_at_actual_useful_solar": (
+                round(actual_handover_soc, 1) if actual_handover_soc is not None else None
+            ),
+            "pv_power_w_at_handover": pv_power_w,
+            "house_demand_w_at_handover": house_demand_w,
+            "useful_solar_threshold_w": useful_solar_threshold_w,
+            "completed_at": datetime.now(UTC).isoformat(),
+        }
+        record.pop("tracking_deadline_at", None)
+        self._smart_outcome_history = [
+            item
+            for item in self._smart_outcome_history
+            if item.get("window_key") != record.get("window_key")
+        ]
+        self._smart_outcome_history.append(record)
+        self._smart_outcome_history = self._smart_outcome_history[-_SMART_OUTCOME_HISTORY_LIMIT:]
+        self._smart_outcome_pending = None
+        self._smart_outcome_solar_candidate_at = None
+        self._smart_outcome_solar_candidate_soc = None
+        self._save_runtime_preferences_later()
+        self.async_update_listeners()
 
     def _maybe_roll_overnight_target(
         self,

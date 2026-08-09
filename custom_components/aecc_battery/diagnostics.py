@@ -9,6 +9,7 @@ scripts on the battery host:
 - Last raw poll response (StorageSN redacted)
 - Fresh control-register dump 3000-3130 read at download time
 - Last 20 control writes with payloads and verify outcomes
+- Last 60 compact SMART overnight plan-versus-outcome records
 
 The intended capture protocol is documented in
 ``debug/diagnostics-capture-tweakers.txt``: take one snapshot per step of
@@ -188,6 +189,12 @@ async def async_get_config_entry_diagnostics(
     control_registers_section = await _fetch_control_registers(coordinator)
 
     write_history_section = coordinator.write_history
+    smart_outcomes_section = {
+        "retention_limit": 60,
+        "completed_count": len(coordinator.smart_outcome_history),
+        "pending": coordinator.pending_smart_outcome,
+        "history": coordinator.smart_outcome_history,
+    }
 
     payload: dict[str, Any] = {
         "integration": integration_section,
@@ -198,6 +205,7 @@ async def async_get_config_entry_diagnostics(
         "last_poll": last_poll_section,
         "control_registers": control_registers_section,
         "write_history": write_history_section,
+        "smart_overnight_outcomes": smart_outcomes_section,
     }
 
     return async_redact_data(payload, _REDACT_KEYS)

@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 1.7.10
+
+- Added a compact, persisted SMART overnight outcome journal retaining the
+  latest 60 completed cycles without continuous debug logging.
+- Compare each locked recommendation with off-peak-end SOC and the SOC when
+  live PV remains above whole-house demand for one minute, distinguishing a
+  missed charge target, late useful solar and morning demand/capacity error.
+- Show the latest morning result on the bundled Overnight Plan card and include
+  the rolling outcome history in downloadable diagnostics.
+- Refreshed the README hero graphic with a clearer AFERIY PS240 local-control
+  banner.
 
 ## 1.7.9
 
