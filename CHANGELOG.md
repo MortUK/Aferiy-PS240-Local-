@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.11
+
+- Let a confirmed early useful-solar handover gradually reduce forecast
+  headroom, while retaining the configured reserve plus safety-buffer floor.
+
 ## 1.7.10
 
 - Added a compact, persisted SMART overnight outcome journal retaining the

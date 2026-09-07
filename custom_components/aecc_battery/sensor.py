@@ -303,12 +303,34 @@ def _planned_handover_floor_soc(
 
 def _effective_adaptive_target_adjustment_soc(
     requested_adjustment_soc: float,
-    protect_solar_handover_buffer: bool,
+    _protect_solar_handover_buffer: bool,
 ) -> float:
-    """Prevent downward learning from eroding a useful-solar handover buffer."""
-    if protect_solar_handover_buffer:
-        return max(0.0, requested_adjustment_soc)
+    """Apply adaptive target learning; the explicit handover floor stays separate."""
+    # ``minimum_target_soc`` in the caller always enforces reserve + configured
+    # buffer. Keeping that floor separate means observed over-target mornings
+    # can reduce forecast headroom without ever consuming the user's buffer.
     return requested_adjustment_soc
+
+
+def _observed_smart_outcome_adjustment_soc(outcome: Any) -> float:
+    """Return a small downward correction after a clearly over-target morning."""
+    if not isinstance(outcome, dict) or outcome.get("result") != "too_high":
+        return 0.0
+    try:
+        handover_difference_soc = float(outcome.get("handover_difference_soc"))
+        forecast_error_minutes = float(outcome.get("forecast_error_minutes"))
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(handover_difference_soc) or not math.isfinite(forecast_error_minutes):
+        return 0.0
+
+    # Only learn from a useful-solar handover that arrived materially earlier
+    # than forecast. A capped correction avoids one odd morning collapsing the
+    # target, while the target floor remains absolute.
+    if handover_difference_soc <= 2.0 or forecast_error_minutes > -15.0:
+        return 0.0
+    correction = min(5.0, max(1.0, (handover_difference_soc - 2.0) * 0.25))
+    return -round(correction, 1)
 
 
 def _morning_handover_accuracy_adjustment_soc(
@@ -3398,9 +3420,24 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
         protect_solar_handover_buffer = bool(
             projection.get("useful_solar_start_at")
         )
+        observed_smart_outcome_adjustment_soc = (
+            _observed_smart_outcome_adjustment_soc(
+                self.coordinator.latest_smart_outcome
+            )
+            if protect_solar_handover_buffer
+            else 0.0
+        )
+        combined_adaptive_target_adjustment_soc = max(
+            -5.0,
+            min(
+                5.0,
+                requested_adaptive_target_adjustment_soc
+                + observed_smart_outcome_adjustment_soc,
+            ),
+        )
         adaptive_target_adjustment_soc = (
             _effective_adaptive_target_adjustment_soc(
-                requested_adaptive_target_adjustment_soc,
+                combined_adaptive_target_adjustment_soc,
                 protect_solar_handover_buffer,
             )
         )
@@ -3524,12 +3561,13 @@ class AeccRecommendedOvernightSocSensor(AeccRuntimeAtCurrentHouseDemandSensor, R
                     requested_adaptive_target_adjustment_soc,
                     1,
                 ),
-                "adaptive_overnight_target_downward_adjustment_suppressed": bool(
-                    protect_solar_handover_buffer
-                    and requested_adaptive_target_adjustment_soc < 0
+                "observed_smart_outcome_adjustment_soc": round(
+                    observed_smart_outcome_adjustment_soc,
+                    1,
                 ),
+                "adaptive_overnight_target_downward_adjustment_suppressed": False,
                 "adaptive_overnight_target_adjustment_policy": (
-                    "no_downward_adjustment_on_solar_handover_days"
+                    "observed_handover_and_whole_day_adaptive_adjustment"
                     if protect_solar_handover_buffer
                     else "whole_day_adaptive_adjustment"
                 ),

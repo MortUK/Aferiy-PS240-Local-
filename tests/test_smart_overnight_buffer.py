@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import math
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +30,8 @@ def _module_function(name: str):
         if isinstance(node, ast.FunctionDef) and node.name == name
     )
     namespace: dict[str, object] = {
+        "Any": Any,
+        "math": math,
         "_FULL_SOC": 100.0,
         "_OVERNIGHT_MORNING_CREDIT_TO_HANDOVER_SOC": 20.0,
         "_OVERNIGHT_MORNING_HANDOVER_ADJUSTMENT_MAX_SOC": 5.0,
@@ -60,7 +64,7 @@ def test_three_percent_buffer_protects_a_thirteen_percent_handover_floor() -> No
     assert planned_floor(10.0, 3.0) == 13.0
 
 
-def test_negative_adaptive_correction_cannot_consume_the_buffer() -> None:
+def test_negative_adaptive_correction_can_reduce_headroom_above_buffer() -> None:
     effective_adjustment = _module_function(
         "_effective_adaptive_target_adjustment_soc"
     )
@@ -74,8 +78,8 @@ def test_negative_adaptive_correction_cannot_consume_the_buffer() -> None:
         adjustment_soc / 100 * 10.0,
     )
 
-    assert adjustment_soc == 0.0
-    assert required_kwh == 0.5
+    assert adjustment_soc == -5.0
+    assert required_kwh == 0.3
 
 
 def test_negative_adaptive_correction_remains_available_for_whole_day_plans() -> None:
@@ -84,6 +88,35 @@ def test_negative_adaptive_correction_remains_available_for_whole_day_plans() ->
     )
 
     assert effective_adjustment(-2.0, False) == -2.0
+
+
+def test_early_useful_solar_outcome_reduces_forecast_headroom() -> None:
+    observed_adjustment = _module_function(
+        "_observed_smart_outcome_adjustment_soc"
+    )
+
+    assert observed_adjustment(
+        {
+            "result": "too_high",
+            "handover_difference_soc": 17.0,
+            "forecast_error_minutes": -166.4,
+        }
+    ) == -3.8
+
+
+def test_observed_outcome_adjustment_requires_clear_evidence() -> None:
+    observed_adjustment = _module_function(
+        "_observed_smart_outcome_adjustment_soc"
+    )
+
+    assert observed_adjustment({"result": "too_low"}) == 0.0
+    assert observed_adjustment(
+        {
+            "result": "too_high",
+            "handover_difference_soc": 17.0,
+            "forecast_error_minutes": 5.0,
+        }
+    ) == 0.0
 
 
 def test_learned_morning_shortfall_adds_headroom_outside_the_user_buffer() -> None:
@@ -127,6 +160,7 @@ def test_solar_capable_day_bridges_to_useful_solar_not_first_support() -> None:
         in source
     )
     assert 'required_energy_basis = "morning_bridge_on_solar_capable_day"' not in source
+    assert "observed_smart_outcome_adjustment_soc" in source
 
 
 def test_learned_morning_demand_is_covered_before_the_buffer() -> None:
