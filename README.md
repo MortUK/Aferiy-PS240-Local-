@@ -96,12 +96,8 @@ The advanced estimate sensors are disabled by default because they can depend on
 Battery Capacity is an advanced estimate input selected in 1.958 kWh module steps. It is used by the charge and overnight energy calculations only. It does not limit the Battery N SOC sensors reported by the master.
 
 The off-peak window defaults to Intelligent Octopus Go, 23:30 to 05:30.
-Named presets are available for Snug Octopus, Intelligent Octopus Go,
-Octopus Go, EDF GoElectric 35, British Gas EV Power+, E.ON Next Drive,
-British Gas Standard E7, EDF E7 Fixed, OVO Simpler Energy E7, Octopus E7,
-and E.ON Next Pumped Fixed. If your tariff uses different cheap-rate hours,
-choose Custom and set the start and end times manually in 24-hour `HH:MM`
-format. These times are used by the overnight target and Pre-Sunrise Need
+Custom and set the start and end times manually in 24-hour `HH:MM` format. 
+These times are used by the overnight target and Pre-Sunrise Need
 calculations.
 
 The external helper checkboxes are reminders for installers. They do not install or validate integrations. Smart estimates look for standard Solcast forecast files and sensors and use `zone.home` for home occupancy. Battery control and the overnight target use the configured tariff window and AECC grid reading; Shelly comparison remains diagnostic only.
