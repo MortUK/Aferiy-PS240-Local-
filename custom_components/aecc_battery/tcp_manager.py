@@ -16,6 +16,8 @@ class TCPClientManager:
     """
 
     _connections: dict[tuple[str, int], TCPClientManager] = {}
+    _RECONNECT_BASE_DELAY = 2.0
+    _RECONNECT_MAX_DELAY = 30.0
 
     def __init__(self, host: str, port: int, timeout: float = 5.0) -> None:
         self.host = host
@@ -24,6 +26,7 @@ class TCPClientManager:
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
+        self._connect_failures = 0
 
     # ── Factory ──────────────────────────────────────────────────────────────
 
@@ -45,30 +48,58 @@ class TCPClientManager:
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         async with self._lock:
             if not self.writer or self.writer.is_closing():
-                await self._connect()
+                await self._connect_locked()
+            assert self.reader is not None and self.writer is not None
             return self.reader, self.writer
 
-    async def _connect(self) -> None:
+    async def _connect_locked(self) -> None:
+        """Open a fresh socket. The caller must hold ``_lock``."""
+        await self._close_locked()
+        if self._connect_failures:
+            delay = min(
+                self._RECONNECT_BASE_DELAY * (2 ** (self._connect_failures - 1)),
+                self._RECONNECT_MAX_DELAY,
+            )
+            _LOGGER.debug(
+                "Waiting %.1fs before reconnecting to %s:%s (failure %d)",
+                delay,
+                self.host,
+                self.port,
+                self._connect_failures,
+            )
+            await asyncio.sleep(delay)
         try:
             _LOGGER.info("Connecting to %s:%s (timeout=%ss)", self.host, self.port, self.timeout)
             self.reader, self.writer = await asyncio.wait_for(
                 asyncio.open_connection(self.host, self.port),
                 timeout=self.timeout,
             )
+            self._connect_failures = 0
             _LOGGER.info("Connected to %s:%s", self.host, self.port)
         except TimeoutError:
+            self.reader = None
+            self.writer = None
+            self._connect_failures += 1
             _LOGGER.error("Connection timed out: %s:%s", self.host, self.port)
             raise
         except OSError as exc:
+            self.reader = None
+            self.writer = None
+            self._connect_failures += 1
             _LOGGER.error("Connection failed: %s:%s – %s", self.host, self.port, exc)
             raise
 
     async def close(self) -> None:
+        async with self._lock:
+            await self._close_locked()
+
+    async def _close_locked(self) -> None:
+        """Close the current socket. The caller must hold ``_lock``."""
         if self.writer and not self.writer.is_closing():
             self.writer.close()
             try:
                 await self.writer.wait_closed()
-            except OSError:
+            except (OSError, RuntimeError):
                 pass
             _LOGGER.info("Closed connection to %s:%s", self.host, self.port)
         self.reader = None
@@ -76,5 +107,5 @@ class TCPClientManager:
 
     async def reconnect(self) -> None:
         _LOGGER.info("Reconnecting to %s:%s", self.host, self.port)
-        await self.close()
-        await self._connect()
+        async with self._lock:
+            await self._connect_locked()

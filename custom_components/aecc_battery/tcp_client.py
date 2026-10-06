@@ -37,7 +37,10 @@ class AeccTcpClient:
         self._io_lock = asyncio.Lock()
 
     async def async_connect(self) -> None:
-        await self._manager._connect()
+        # Reuse a healthy shared socket. Setup and coordinator initialization
+        # both call async_connect, so opening unconditionally creates a second
+        # connection to the same device.
+        await self._manager.get_reader_writer()
         self._connected = True
 
     async def async_disconnect(self) -> None:
@@ -135,15 +138,14 @@ class AeccTcpClient:
                 await writer.drain()
                 result = await self._read_json(reader)
                 if result is None:
-                    _LOGGER.warning("GET %s returned no data - forcing reconnect", command)
+                    _LOGGER.warning("GET %s returned no data - closing stale connection", command)
                     self._connected = False
-                    await self._manager.reconnect()
+                    await self._close_failed_connection()
                 return result
             except (ConnectionResetError, OSError, asyncio.IncompleteReadError) as exc:
-                _LOGGER.warning("GET %s connection error: %s - reconnecting after 2s cooldown", command, exc)
+                _LOGGER.warning("GET %s connection error: %s - closing stale connection", command, exc)
                 self._connected = False
-                await asyncio.sleep(2)
-                await self._manager.reconnect()
+                await self._close_failed_connection()
                 return None
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError) as exc:
                 _LOGGER.error("GET %s error: %s", command, exc, exc_info=True)
@@ -165,17 +167,28 @@ class AeccTcpClient:
                 writer.write((json.dumps(payload) + "\n").encode("utf-8"))
                 await writer.drain()
                 response = await self._read_json(reader)
+                if response is None:
+                    # The command may already have reached the device. Drop
+                    # the stream, but never resend a SET automatically.
+                    self._connected = False
+                    await self._close_failed_connection()
                 _LOGGER.debug("RX SET <- %s", response)
                 return response
             except (ConnectionResetError, OSError, asyncio.IncompleteReadError) as exc:
-                _LOGGER.warning("SET %s connection error: %s - reconnecting after 2s cooldown", command, exc)
+                _LOGGER.warning("SET %s connection error: %s - closing stale connection", command, exc)
                 self._connected = False
-                await asyncio.sleep(2)
-                await self._manager.reconnect()
+                await self._close_failed_connection()
                 return None
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError) as exc:
                 _LOGGER.error("SET %s error: %s", command, exc, exc_info=True)
                 return None
+
+    async def _close_failed_connection(self) -> None:
+        """Discard a failed socket; the next request reconnects with backoff."""
+        try:
+            await self._manager.close()
+        except (OSError, ConnectionError) as exc:
+            _LOGGER.debug("Closing failed battery connection also failed: %s", exc)
 
     async def _read_json(self, reader: asyncio.StreamReader) -> dict[str, Any] | None:
         buffer = b""

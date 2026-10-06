@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.12
+
+- Added a 1% SOC start margin to SMART overnight charging so the battery bank
+  can drift just below its locked target before automatic charging begins,
+  while retaining the existing stable-reading confirmation and minimum-SOC
+  safeguard.
+- Reuse a healthy shared TCP connection during client initialization and
+  apply capped exponential backoff after connection failures. Failed SET
+  commands are not automatically retried because the device may already have
+  received them.
+
 ## 1.7.11
 
 - Let a confirmed early useful-solar handover gradually reduce forecast

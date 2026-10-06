@@ -77,6 +77,7 @@ _ADAPTIVE_TARGET_SOC_MIN = -5.0
 _ADAPTIVE_TARGET_SOC_MAX = 5.0
 _ADAPTIVE_TARGET_SOC_STEP = 1.0
 _ADAPTIVE_TARGET_SOC_DECAY = 0.98
+_OVERNIGHT_CHARGE_START_MARGIN_SOC = 1.0
 _SUSPECT_FRAME_TOLERANCE = 3
 _SOC_COLLAPSE_FLOOR = 5.0
 _DISCHARGE_IMBALANCE_MIN_ACTIVE_W = 100.0
@@ -1531,6 +1532,22 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         ):
             self._overnight_locked_target_reached_threshold = True
 
+        if target_soc is None or current_soc is None:
+            charge_start_margin_soc = 0.0
+            charge_start_threshold_soc = None
+            charge_start_due = False
+        else:
+            charge_start_margin_soc = min(
+                _OVERNIGHT_CHARGE_START_MARGIN_SOC,
+                max(0.0, float(target_soc) - float(self._commanded_min_soc)),
+            )
+            charge_start_threshold_soc = float(target_soc) - charge_start_margin_soc
+            charge_start_due = (
+                current_soc < float(target_soc)
+                if charge_start_margin_soc == 0
+                else current_soc <= charge_start_threshold_soc
+            )
+
         base_attrs = {
             "mode": mode,
             "target_source": target_source,
@@ -1565,6 +1582,12 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else None
             ),
             "current_soc": round(current_soc, 1) if current_soc is not None else None,
+            "charge_start_margin_soc": round(charge_start_margin_soc, 1),
+            "charge_start_threshold_soc": (
+                round(charge_start_threshold_soc, 1)
+                if charge_start_threshold_soc is not None
+                else None
+            ),
             "off_peak_start": self.off_peak_start,
             "off_peak_end": self.off_peak_end,
             "effective_start": window["effective_start"].isoformat(),
@@ -1635,7 +1658,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         base_attrs,
                     )
                 return
-            if current_soc <= target_soc:
+            if charge_start_due:
                 is_new_charge_start = not (
                     self._overnight_scheduler_started_charge
                     or self._overnight_last_action == "charge"
@@ -1651,7 +1674,7 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     }
                     self._set_overnight_status(
                         "Monitoring target",
-                        "SOC is at or below target; waiting for one more stable reading before charging.",
+                        "SOC is below the charge-start threshold; waiting for one more stable reading before charging.",
                         confirm_attrs,
                     )
                     return
@@ -1675,7 +1698,11 @@ class AeccBatteryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._reset_overnight_charge_confirmation()
                 self._set_overnight_status(
                     "Monitoring target",
-                    "SOC is above target; waiting in case it falls during off-peak.",
+                    (
+                        "SOC is within the start margin of target; waiting for a sustained drop before charging."
+                        if current_soc < target_soc
+                        else "SOC is above target; waiting in case it falls during off-peak."
+                    ),
                     base_attrs,
                 )
             return
